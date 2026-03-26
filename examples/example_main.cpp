@@ -11,32 +11,30 @@ int main()
         return 1;
     }
 
-    gripper::MotionControlParameters p{};
-    if (!g.readMotionControlParameters(p))
+    gripper::MotorHardwareParameters p{};
+    if (!g.readMotorHardwareParameters(p))
     {
-        std::cerr << "readMotionControlParameters failed: " << g.lastError() << '\n';
+        std::cerr << "readMotorHardwareParameters failed: " << g.lastError() << '\n';
         return 1;
     }
 
-    std::cout << "position_kp           = " << p.position_kp << '\n';
-    std::cout << "position_ki           = " << p.position_ki << '\n';
-    std::cout << "position_output_limit = " << p.position_output_limit
-              << " (0.01 rpm)\n";
-    std::cout << "speed_kp              = " << p.speed_kp << '\n';
-    std::cout << "speed_ki              = " << p.speed_ki << '\n';
-    std::cout << "speed_output_limit    = " << p.speed_output_limit
-              << " (0.001 A)\n";
+    std::cout << "motor_name             = " << p.motor_name << '\n';
+    std::cout << "pole_pairs             = " << static_cast<int>(p.pole_pairs) << '\n';
+    std::cout << "phase_resistance_ohm   = " << p.phase_resistance_ohm << '\n';
+    std::cout << "phase_inductance_mh    = " << p.phase_inductance_mh << '\n';
+    std::cout << "torque_constant_nm     = " << p.torque_constant_nm << '\n';
+    std::cout << "gear_ratio             = " << static_cast<int>(p.gear_ratio) << '\n';
 
-    // 最安全的写测试：原值写回，不保存
     /*
-    gripper::MotionControlParameters after{};
-    if (!g.writeMotionControlParametersTemp(p, &after))
+    // 最安全的写测试：原值写回
+    gripper::MotorHardwareParameters after{};
+    if (!g.writeMotorHardwareParameters(p, &after))
     {
-        std::cerr << "writeMotionControlParametersTemp failed: " << g.lastError() << '\n';
+        std::cerr << "writeMotorHardwareParameters failed: " << g.lastError() << '\n';
     }
     else
     {
-        std::cout << "writeMotionControlParametersTemp ok\n";
+        std::cout << "writeMotorHardwareParameters ok\n";
     }
     */
 

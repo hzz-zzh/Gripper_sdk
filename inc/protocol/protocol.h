@@ -20,6 +20,9 @@ enum class Command : uint8_t
     ReadUserParams = 0x10,
     WriteUserParams = 0x11,
 
+    ReadMotorHwParams   = 0x12,
+    WriteMotorHwParams  = 0x13,
+
     ReadMotionParams      = 0x14,
     WriteMotionParamsTemp = 0x15,
     WriteMotionParamsSave = 0x16,

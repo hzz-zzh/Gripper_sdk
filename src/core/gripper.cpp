@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <utility>
+#include <algorithm>
 
 namespace gripper
 {
@@ -530,6 +531,89 @@ std::vector<uint8_t> Gripper::buildMotionControlParametersPayload(const MotionCo
     protocol::appendFloatLE(payload, in.speed_kp);
     protocol::appendFloatLE(payload, in.speed_ki);
     protocol::appendU32LE(payload, in.speed_output_limit);
+
+    return payload;
+}
+
+bool Gripper::readMotorHardwareParameters(MotorHardwareParameters& out)
+{
+    protocol::Frame response;
+    if (!transact(protocol::Command::ReadMotorHwParams, {}, response, true))
+    {
+        return false;
+    }
+
+    return parseMotorHardwareParametersPayload(response.payload, out, last_error_);
+}
+
+bool Gripper::writeMotorHardwareParameters(const MotorHardwareParameters& in,
+                                           MotorHardwareParameters* out)
+{
+    const std::vector<uint8_t> payload = buildMotorHardwareParametersPayload(in);
+
+    protocol::Frame response;
+    if (!transact(protocol::Command::WriteMotorHwParams, payload, response, true))
+    {
+        return false;
+    }
+
+    if (out)
+    {
+        return parseMotorHardwareParametersPayload(response.payload, *out, last_error_);
+    }
+
+    return true;
+}
+
+bool Gripper::parseMotorHardwareParametersPayload(const std::vector<uint8_t>& payload,
+                                                  MotorHardwareParameters& out,
+                                                  std::string& error)
+{
+    if (payload.size() != 0x1E)
+    {
+        error = "invalid motor-hardware-parameters payload length";
+        return false;
+    }
+
+    const char* name_ptr = reinterpret_cast<const char*>(payload.data());
+    std::size_t name_len = 0;
+    while (name_len < 16 && name_ptr[name_len] != '\0')
+    {
+        ++name_len;
+    }
+    out.motor_name.assign(name_ptr, name_len);
+
+    out.pole_pairs = payload[16];
+    out.phase_resistance_ohm = protocol::readFloatLE(&payload[17]);
+    out.phase_inductance_mh = protocol::readFloatLE(&payload[21]);
+    out.torque_constant_nm = protocol::readFloatLE(&payload[25]);
+    out.gear_ratio = payload[29];
+
+    return true;
+}
+
+std::vector<uint8_t> Gripper::buildMotorHardwareParametersPayload(const MotorHardwareParameters& in)
+{
+    std::vector<uint8_t> payload;
+    payload.reserve(30);
+
+    for (std::size_t i = 0; i < 16; ++i)
+    {
+        if (i < in.motor_name.size())
+        {
+            payload.push_back(static_cast<uint8_t>(in.motor_name[i]));
+        }
+        else
+        {
+            payload.push_back(0);
+        }
+    }
+
+    payload.push_back(in.pole_pairs);
+    protocol::appendFloatLE(payload, in.phase_resistance_ohm);
+    protocol::appendFloatLE(payload, in.phase_inductance_mh);
+    protocol::appendFloatLE(payload, in.torque_constant_nm);
+    payload.push_back(in.gear_ratio);
 
     return payload;
 }

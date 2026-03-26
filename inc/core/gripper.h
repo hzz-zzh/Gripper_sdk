@@ -142,6 +142,18 @@ struct MotionControlParameters
     // 含义：速度/位置模式最大 Q 轴电流，单位 0.001 A
 };
 
+struct MotorHardwareParameters
+{
+    std::string motor_name;
+    uint8_t pole_pairs = 0;
+
+    float phase_resistance_ohm = 0.0f;
+    float phase_inductance_mh = 0.0f;
+    float torque_constant_nm = 0.0f;
+
+    uint8_t gear_ratio = 0;
+};
+
 class Gripper
 {
 public:
@@ -188,6 +200,10 @@ public:
     bool writeMotionControlParametersSave(const MotionControlParameters& in,
                                           MotionControlParameters* out = nullptr);
 
+    bool readMotorHardwareParameters(MotorHardwareParameters& out);
+    bool writeMotorHardwareParameters(const MotorHardwareParameters& in,
+                                      MotorHardwareParameters* out = nullptr);
+
 private:
     bool transact(protocol::Command cmd,
                   const std::vector<uint8_t>& payload,
@@ -211,6 +227,12 @@ private:
                                                     std::string& error);
 
     static std::vector<uint8_t> buildMotionControlParametersPayload(const MotionControlParameters& in);
+
+    static bool parseMotorHardwareParametersPayload(const std::vector<uint8_t>& payload,
+                                                    MotorHardwareParameters& out,
+                                                    std::string& error);
+
+    static std::vector<uint8_t> buildMotorHardwareParametersPayload(const MotorHardwareParameters& in);
 
 private:
     std::unique_ptr<ITransport> transport_;
