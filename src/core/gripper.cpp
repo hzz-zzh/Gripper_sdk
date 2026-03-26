@@ -448,6 +448,92 @@ std::vector<uint8_t> Gripper::buildWritableUserParametersPayload(const WritableU
     return payload;
 }
 
+bool Gripper::readMotionControlParameters(MotionControlParameters& out)
+{
+    protocol::Frame response;
+    if (!transact(protocol::Command::ReadMotionParams, {}, response, true))
+    {
+        return false;
+    }
+
+    return parseMotionControlParametersPayload(response.payload, out, last_error_);
+}
+
+bool Gripper::writeMotionControlParametersTemp(const MotionControlParameters& in,
+                                               MotionControlParameters* out)
+{
+    const std::vector<uint8_t> payload = buildMotionControlParametersPayload(in);
+
+    protocol::Frame response;
+    if (!transact(protocol::Command::WriteMotionParamsTemp, payload, response, true))
+    {
+        return false;
+    }
+
+    if (out)
+    {
+        return parseMotionControlParametersPayload(response.payload, *out, last_error_);
+    }
+
+    return true;
+}
+
+bool Gripper::writeMotionControlParametersSave(const MotionControlParameters& in,
+                                               MotionControlParameters* out)
+{
+    const std::vector<uint8_t> payload = buildMotionControlParametersPayload(in);
+
+    protocol::Frame response;
+    if (!transact(protocol::Command::WriteMotionParamsSave, payload, response, true))
+    {
+        return false;
+    }
+
+    if (out)
+    {
+        return parseMotionControlParametersPayload(response.payload, *out, last_error_);
+    }
+
+    return true;
+}
+
+bool Gripper::parseMotionControlParametersPayload(const std::vector<uint8_t>& payload,
+                                                  MotionControlParameters& out,
+                                                  std::string& error)
+{
+    if (payload.size() != 0x18)
+    {
+        error = "invalid motion-control-parameters payload length";
+        return false;
+    }
+
+    out.position_kp = protocol::readFloatLE(&payload[0]);
+    out.position_ki = protocol::readFloatLE(&payload[4]);
+    out.position_output_limit = protocol::readU32LE(&payload[8]);
+
+    out.speed_kp = protocol::readFloatLE(&payload[12]);
+    out.speed_ki = protocol::readFloatLE(&payload[16]);
+    out.speed_output_limit = protocol::readU32LE(&payload[20]);
+
+    return true;
+}
+
+std::vector<uint8_t> Gripper::buildMotionControlParametersPayload(const MotionControlParameters& in)
+{
+    std::vector<uint8_t> payload;
+    payload.reserve(24);
+
+    protocol::appendFloatLE(payload, in.position_kp);
+    protocol::appendFloatLE(payload, in.position_ki);
+    protocol::appendU32LE(payload, in.position_output_limit);
+
+    protocol::appendFloatLE(payload, in.speed_kp);
+    protocol::appendFloatLE(payload, in.speed_ki);
+    protocol::appendU32LE(payload, in.speed_output_limit);
+
+    return payload;
+}
+
 bool Gripper::transact(protocol::Command cmd,
                        const std::vector<uint8_t>& payload,
                        protocol::Frame& response,

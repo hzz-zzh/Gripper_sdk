@@ -20,6 +20,10 @@ enum class Command : uint8_t
     ReadUserParams = 0x10,
     WriteUserParams = 0x11,
 
+    ReadMotionParams      = 0x14,
+    WriteMotionParamsTemp = 0x15,
+    WriteMotionParamsSave = 0x16,
+
     SetZeroPoint   = 0x1D,
     EncoderCalib   = 0x1E,
     RestoreDefault = 0x1F,
@@ -59,6 +63,8 @@ bool parseFrame(const std::vector<uint8_t>& raw, Frame& out, std::string* error 
 void appendU16LE(std::vector<uint8_t>& out, uint16_t value);
 void appendU32LE(std::vector<uint8_t>& out, uint32_t value);
 void appendI32LE(std::vector<uint8_t>& out, int32_t value);
+void appendFloatLE(std::vector<uint8_t>& out, float value);
+float readFloatLE(const uint8_t* data);
 
 uint16_t readU16LE(const uint8_t* data);
 uint32_t readU32LE(const uint8_t* data);

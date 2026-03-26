@@ -127,6 +127,21 @@ struct WritableUserParameters
     uint8_t temperature_fault_delay_s = 0;
 };
 
+struct MotionControlParameters
+{
+    float position_kp = 0.0f;
+    float position_ki = 0.0f;
+
+    uint32_t position_output_limit = 0;
+    // 含义：位置模式最大速度，单位 0.01 rpm
+
+    float speed_kp = 0.0f;
+    float speed_ki = 0.0f;
+
+    uint32_t speed_output_limit = 0;
+    // 含义：速度/位置模式最大 Q 轴电流，单位 0.001 A
+};
+
 class Gripper
 {
 public:
@@ -167,6 +182,12 @@ public:
     bool readUserParameters(UserParameters& out);
     bool writeUserParameters(const WritableUserParameters& in, UserParameters* out = nullptr);
 
+    bool readMotionControlParameters(MotionControlParameters& out);
+    bool writeMotionControlParametersTemp(const MotionControlParameters& in,
+                                          MotionControlParameters* out = nullptr);
+    bool writeMotionControlParametersSave(const MotionControlParameters& in,
+                                          MotionControlParameters* out = nullptr);
+
 private:
     bool transact(protocol::Command cmd,
                   const std::vector<uint8_t>& payload,
@@ -184,6 +205,12 @@ private:
                                            std::string& error);
 
     static std::vector<uint8_t> buildWritableUserParametersPayload(const WritableUserParameters& in);
+
+    static bool parseMotionControlParametersPayload(const std::vector<uint8_t>& payload,
+                                                    MotionControlParameters& out,
+                                                    std::string& error);
+
+    static std::vector<uint8_t> buildMotionControlParametersPayload(const MotionControlParameters& in);
 
 private:
     std::unique_ptr<ITransport> transport_;

@@ -1,5 +1,6 @@
 #include "protocol/protocol.h"
 #include "protocol/crc.h"
+#include <cstring>
 
 namespace gripper::protocol
 {
@@ -111,4 +112,22 @@ int32_t readI32LE(const uint8_t* data)
 {
     return static_cast<int32_t>(readU32LE(data));
 }
+
+void appendFloatLE(std::vector<uint8_t>& out, float value)
+{
+    static_assert(sizeof(float) == 4, "float must be 4 bytes");
+
+    uint32_t raw = 0;
+    std::memcpy(&raw, &value, sizeof(float));
+    appendU32LE(out, raw);
+}
+
+float readFloatLE(const uint8_t* data)
+{
+    const uint32_t raw = readU32LE(data);
+    float value = 0.0f;
+    std::memcpy(&value, &raw, sizeof(float));
+    return value;
+}
+
 }
