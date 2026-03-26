@@ -50,16 +50,41 @@ struct RealtimeStatus
     uint8_t fault_code = 0;
 };
 
+enum class BrakeAction : uint8_t
+{
+    Release   = 0x00,
+    Engage    = 0x01,
+    ReadState = 0xFF
+};
+
+enum class Rs485BaudrateCode : uint8_t
+{
+    Baud921600 = 0,
+    Baud460800 = 1,
+    Baud115200 = 2,
+    Baud57600  = 3,
+    Baud38400  = 4,
+    Baud19200  = 5,
+    Baud9600   = 6
+};
+
+enum class CanBaudrateCode : uint8_t
+{
+    Baud1M   = 0,
+    Baud500K = 1,
+    Baud250K = 2,
+    Baud125K = 3,
+    Baud100K = 4
+};
+
 struct UserParameters
 {
-    // 只读 / 校准得到
     uint16_t electrical_angle_offset = 0;
     uint16_t mechanical_angle_offset = 0;
     uint16_t current_offset_u = 0;
     uint16_t current_offset_v = 0;
     uint16_t current_offset_w = 0;
 
-    // 可读可写
     uint8_t encoder_model = 0;
     bool invert_encoder_direction = false;
     bool enable_second_encoder = false;
@@ -102,33 +127,6 @@ struct WritableUserParameters
     uint8_t temperature_fault_delay_s = 0;
 };
 
-enum class BrakeAction : uint8_t
-{
-    Release   = 0x00,
-    Engage    = 0x01,
-    ReadState = 0xFF
-};
-
-enum class Rs485BaudrateCode : uint8_t
-{
-    Baud921600 = 0,
-    Baud460800 = 1,
-    Baud115200 = 2,
-    Baud57600  = 3,
-    Baud38400  = 4,
-    Baud19200  = 5,
-    Baud9600   = 6
-};
-
-enum class CanBaudrateCode : uint8_t
-{
-    Baud1M   = 0,
-    Baud500K = 1,
-    Baud250K = 2,
-    Baud125K = 3,
-    Baud100K = 4
-};
-
 class Gripper
 {
 public:
@@ -158,7 +156,6 @@ public:
     bool goHomeShortest(RealtimeStatus* out = nullptr);
     bool motorOff(RealtimeStatus* out = nullptr);
 
-    // 第一批补充命令
     bool reboot();
     bool setCurrentPositionAsZero(uint16_t& mechanical_offset);
     bool restoreDefaultParameters();
@@ -167,7 +164,6 @@ public:
     bool brakeEngage(uint8_t& brake_state);
     bool brakeReadState(uint8_t& brake_state);
 
-    //second
     bool readUserParameters(UserParameters& out);
     bool writeUserParameters(const WritableUserParameters& in, UserParameters* out = nullptr);
 
@@ -178,10 +174,11 @@ private:
                   bool expect_response = true);
 
     bool readResponse(protocol::Frame& frame);
+
     static bool parseRealtimePayload(const std::vector<uint8_t>& payload,
                                      RealtimeStatus& out,
                                      std::string& error);
-                    
+
     static bool parseUserParametersPayload(const std::vector<uint8_t>& payload,
                                            UserParameters& out,
                                            std::string& error);
