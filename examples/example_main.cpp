@@ -1,5 +1,5 @@
 #include <iostream>
-#include "gripper_sdk.h"
+#include "core/gripper.h"
 
 int main()
 {

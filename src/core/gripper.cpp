@@ -1,4 +1,4 @@
-#include "gripper_sdk.h"
+#include "core/gripper.h"
 
 namespace gripper
 {
