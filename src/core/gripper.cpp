@@ -354,6 +354,99 @@ bool Gripper::brakeReadState(uint8_t& brake_state)
     return brakeControl(BrakeAction::ReadState, brake_state);
 }
 
+bool Gripper::readUserParameters(UserParameters& out)
+{
+    protocol::Frame response;
+    if (!transact(protocol::Command::ReadUserParams, {}, response, true))
+    {
+        return false;
+    }
+
+    return parseUserParametersPayload(response.payload, out, last_error_);
+}
+
+bool Gripper::writeUserParameters(const WritableUserParameters& in, UserParameters* out)
+{
+    const std::vector<uint8_t> payload = buildWritableUserParametersPayload(in);
+
+    protocol::Frame response;
+    if (!transact(protocol::Command::WriteUserParams, payload, response, true))
+    {
+        return false;
+    }
+
+    if (out)
+    {
+        return parseUserParametersPayload(response.payload, *out, last_error_);
+    }
+
+    return true;
+}
+
+bool Gripper::parseUserParametersPayload(const std::vector<uint8_t>& payload,
+                                         UserParameters& out,
+                                         std::string& error)
+{
+    if (payload.size() != 0x1A)
+    {
+        error = "invalid user-parameters payload length";
+        return false;
+    }
+
+    out.electrical_angle_offset = protocol::readU16LE(&payload[0]);
+    out.mechanical_angle_offset = protocol::readU16LE(&payload[2]);
+    out.current_offset_u = protocol::readU16LE(&payload[4]);
+    out.current_offset_v = protocol::readU16LE(&payload[6]);
+    out.current_offset_w = protocol::readU16LE(&payload[8]);
+
+    out.encoder_model = payload[10];
+    out.invert_encoder_direction = (payload[11] != 0);
+    out.enable_second_encoder = (payload[12] != 0);
+    out.speed_filter_coeff = payload[13];
+
+    out.device_address = payload[14];
+    out.rs485_baudrate = static_cast<Rs485BaudrateCode>(payload[15]);
+    out.can_baudrate = static_cast<CanBaudrateCode>(payload[16]);
+    out.enable_canopen = (payload[17] != 0);
+
+    out.max_bus_voltage_0p01v = protocol::readU16LE(&payload[18]);
+    out.voltage_fault_delay_s = payload[20];
+
+    out.max_bus_current_0p01a = protocol::readU16LE(&payload[21]);
+    out.current_fault_delay_s = payload[23];
+
+    out.max_temperature_c = payload[24];
+    out.temperature_fault_delay_s = payload[25];
+
+    return true;
+}
+
+std::vector<uint8_t> Gripper::buildWritableUserParametersPayload(const WritableUserParameters& in)
+{
+    std::vector<uint8_t> payload;
+    payload.reserve(16);
+
+    payload.push_back(in.encoder_model);
+    payload.push_back(in.invert_encoder_direction ? 1 : 0);
+    payload.push_back(in.enable_second_encoder ? 1 : 0);
+    payload.push_back(in.speed_filter_coeff);
+
+    payload.push_back(in.device_address);
+    payload.push_back(static_cast<uint8_t>(in.rs485_baudrate));
+    payload.push_back(static_cast<uint8_t>(in.can_baudrate));
+    payload.push_back(in.enable_canopen ? 1 : 0);
+
+    protocol::appendU16LE(payload, in.max_bus_voltage_0p01v);
+    payload.push_back(in.voltage_fault_delay_s);
+
+    protocol::appendU16LE(payload, in.max_bus_current_0p01a);
+    payload.push_back(in.current_fault_delay_s);
+
+    payload.push_back(in.max_temperature_c);
+    payload.push_back(in.temperature_fault_delay_s);
+
+    return payload;
+}
 
 bool Gripper::transact(protocol::Command cmd,
                        const std::vector<uint8_t>& payload,

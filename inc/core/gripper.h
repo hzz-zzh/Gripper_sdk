@@ -50,11 +50,83 @@ struct RealtimeStatus
     uint8_t fault_code = 0;
 };
 
+struct UserParameters
+{
+    // 只读 / 校准得到
+    uint16_t electrical_angle_offset = 0;
+    uint16_t mechanical_angle_offset = 0;
+    uint16_t current_offset_u = 0;
+    uint16_t current_offset_v = 0;
+    uint16_t current_offset_w = 0;
+
+    // 可读可写
+    uint8_t encoder_model = 0;
+    bool invert_encoder_direction = false;
+    bool enable_second_encoder = false;
+    uint8_t speed_filter_coeff = 0;
+
+    uint8_t device_address = 0x01;
+    Rs485BaudrateCode rs485_baudrate = Rs485BaudrateCode::Baud115200;
+    CanBaudrateCode can_baudrate = CanBaudrateCode::Baud1M;
+    bool enable_canopen = false;
+
+    uint16_t max_bus_voltage_0p01v = 0;
+    uint8_t voltage_fault_delay_s = 0;
+
+    uint16_t max_bus_current_0p01a = 0;
+    uint8_t current_fault_delay_s = 0;
+
+    uint8_t max_temperature_c = 0;
+    uint8_t temperature_fault_delay_s = 0;
+};
+
+struct WritableUserParameters
+{
+    uint8_t encoder_model = 0;
+    bool invert_encoder_direction = false;
+    bool enable_second_encoder = false;
+    uint8_t speed_filter_coeff = 0;
+
+    uint8_t device_address = 0x01;
+    Rs485BaudrateCode rs485_baudrate = Rs485BaudrateCode::Baud115200;
+    CanBaudrateCode can_baudrate = CanBaudrateCode::Baud1M;
+    bool enable_canopen = false;
+
+    uint16_t max_bus_voltage_0p01v = 0;
+    uint8_t voltage_fault_delay_s = 0;
+
+    uint16_t max_bus_current_0p01a = 0;
+    uint8_t current_fault_delay_s = 0;
+
+    uint8_t max_temperature_c = 0;
+    uint8_t temperature_fault_delay_s = 0;
+};
+
 enum class BrakeAction : uint8_t
 {
     Release   = 0x00,
     Engage    = 0x01,
     ReadState = 0xFF
+};
+
+enum class Rs485BaudrateCode : uint8_t
+{
+    Baud921600 = 0,
+    Baud460800 = 1,
+    Baud115200 = 2,
+    Baud57600  = 3,
+    Baud38400  = 4,
+    Baud19200  = 5,
+    Baud9600   = 6
+};
+
+enum class CanBaudrateCode : uint8_t
+{
+    Baud1M   = 0,
+    Baud500K = 1,
+    Baud250K = 2,
+    Baud125K = 3,
+    Baud100K = 4
 };
 
 class Gripper
@@ -95,6 +167,10 @@ public:
     bool brakeEngage(uint8_t& brake_state);
     bool brakeReadState(uint8_t& brake_state);
 
+    //second
+    bool readUserParameters(UserParameters& out);
+    bool writeUserParameters(const WritableUserParameters& in, UserParameters* out = nullptr);
+
 private:
     bool transact(protocol::Command cmd,
                   const std::vector<uint8_t>& payload,
@@ -105,6 +181,12 @@ private:
     static bool parseRealtimePayload(const std::vector<uint8_t>& payload,
                                      RealtimeStatus& out,
                                      std::string& error);
+                    
+    static bool parseUserParametersPayload(const std::vector<uint8_t>& payload,
+                                           UserParameters& out,
+                                           std::string& error);
+
+    static std::vector<uint8_t> buildWritableUserParametersPayload(const WritableUserParameters& in);
 
 private:
     std::unique_ptr<ITransport> transport_;

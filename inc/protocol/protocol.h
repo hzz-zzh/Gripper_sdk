@@ -17,6 +17,9 @@ enum class Command : uint8_t
     ReadRealtime  = 0x0B,
     ClearFault    = 0x0F,
 
+    ReadUserParams = 0x10,
+    WriteUserParams = 0x11,
+
     SetZeroPoint   = 0x1D,
     EncoderCalib   = 0x1E,
     RestoreDefault = 0x1F,
