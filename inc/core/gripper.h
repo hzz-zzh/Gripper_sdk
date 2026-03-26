@@ -204,6 +204,12 @@ public:
     bool writeMotorHardwareParameters(const MotorHardwareParameters& in,
                                       MotorHardwareParameters* out = nullptr);
 
+    bool startEncoderCalibration(RealtimeStatus* out = nullptr);
+
+    bool startEncoderCalibrationAndWait(int wait_ms,
+                                    int poll_interval_ms,
+                                    RealtimeStatus& out);
+
 private:
     bool transact(protocol::Command cmd,
                   const std::vector<uint8_t>& payload,

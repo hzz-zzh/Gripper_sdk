@@ -11,30 +11,34 @@ int main()
         return 1;
     }
 
-    gripper::MotorHardwareParameters p{};
-    if (!g.readMotorHardwareParameters(p))
+    gripper::RealtimeStatus status{};
+    if (!g.readRealtime(status))
     {
-        std::cerr << "readMotorHardwareParameters failed: " << g.lastError() << '\n';
+        std::cerr << "readRealtime failed: " << g.lastError() << '\n';
         return 1;
     }
 
-    std::cout << "motor_name             = " << p.motor_name << '\n';
-    std::cout << "pole_pairs             = " << static_cast<int>(p.pole_pairs) << '\n';
-    std::cout << "phase_resistance_ohm   = " << p.phase_resistance_ohm << '\n';
-    std::cout << "phase_inductance_mh    = " << p.phase_inductance_mh << '\n';
-    std::cout << "torque_constant_nm     = " << p.torque_constant_nm << '\n';
-    std::cout << "gear_ratio             = " << static_cast<int>(p.gear_ratio) << '\n';
+    std::cout << "before calib: fault = 0x"
+              << std::hex << static_cast<int>(status.fault_code) << std::dec << '\n';
 
-    /*
-    // 最安全的写测试：原值写回
-    gripper::MotorHardwareParameters after{};
-    if (!g.writeMotorHardwareParameters(p, &after))
+    // 注意：校准时必须空载，且不要干扰电机转动
+
+    if (!g.startEncoderCalibration(&status))
     {
-        std::cerr << "writeMotorHardwareParameters failed: " << g.lastError() << '\n';
+        std::cerr << "startEncoderCalibration failed: " << g.lastError() << '\n';
+        return 1;
     }
-    else
+
+    std::cout << "calibration command sent, run_state = "
+              << static_cast<int>(status.run_state) << '\n';
+
+
+    // 如需中止校准，可发送 0x2F
+    /*
+    if (!g.motorOff(&status))
     {
-        std::cout << "writeMotorHardwareParameters ok\n";
+        std::cerr << "motorOff failed: " << g.lastError() << '\n';
+        return 1;
     }
     */
 

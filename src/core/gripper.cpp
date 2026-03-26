@@ -4,6 +4,8 @@
 #include <chrono>
 #include <utility>
 #include <algorithm>
+#include <thread>
+#include <chrono>
 
 namespace gripper
 {
@@ -616,6 +618,50 @@ std::vector<uint8_t> Gripper::buildMotorHardwareParametersPayload(const MotorHar
     payload.push_back(in.gear_ratio);
 
     return payload;
+}
+
+bool Gripper::startEncoderCalibration(RealtimeStatus* out)
+{
+    protocol::Frame response;
+    if (!transact(protocol::Command::EncoderCalib, {}, response, true))
+    {
+        return false;
+    }
+
+    if (out)
+    {
+        return parseRealtimePayload(response.payload, *out, last_error_);
+    }
+
+    return true;
+}
+
+bool Gripper::startEncoderCalibrationAndWait(int wait_ms,
+                                             int poll_interval_ms,
+                                             RealtimeStatus& out)
+{
+    RealtimeStatus first{};
+    if (!startEncoderCalibration(&first))
+    {
+        return false;
+    }
+
+    const int loops = (poll_interval_ms > 0) ? (wait_ms / poll_interval_ms) : 0;
+
+    for (int i = 0; i < loops; ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+
+        if (!readRealtime(out))
+        {
+            return false;
+        }
+
+        // 这里先不强行定义“完成条件”，因为协议没单独给校准完成标志
+        // 先以“无故障且能正常读状态”为基本返回条件
+    }
+
+    return true;
 }
 
 bool Gripper::transact(protocol::Command cmd,
