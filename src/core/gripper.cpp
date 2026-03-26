@@ -272,6 +272,89 @@ bool Gripper::motorOff(RealtimeStatus* out)
     return true;
 }
 
+bool Gripper::reboot()
+{
+    protocol::Frame dummy;
+    if (!transact(protocol::Command::Reboot, {}, dummy, false))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool Gripper::setCurrentPositionAsZero(uint16_t& mechanical_offset)
+{
+    protocol::Frame response;
+    if (!transact(protocol::Command::SetZeroPoint, {}, response, true))
+    {
+        return false;
+    }
+
+    if (response.payload.size() != 2)
+    {
+        last_error_ = "invalid zero-point payload length";
+        return false;
+    }
+
+    mechanical_offset = protocol::readU16LE(response.payload.data());
+    return true;
+}
+
+bool Gripper::restoreDefaultParameters()
+{
+    protocol::Frame response;
+    if (!transact(protocol::Command::RestoreDefault, {}, response, true))
+    {
+        return false;
+    }
+
+    if (!response.payload.empty())
+    {
+        last_error_ = "invalid restore-default payload length";
+        return false;
+    }
+
+    return true;
+}
+
+bool Gripper::brakeControl(BrakeAction action, uint8_t& brake_state)
+{
+    std::vector<uint8_t> payload;
+    payload.push_back(static_cast<uint8_t>(action));
+
+    protocol::Frame response;
+    if (!transact(protocol::Command::BrakeControl, payload, response, true))
+    {
+        return false;
+    }
+
+    if (response.payload.size() != 1)
+    {
+        last_error_ = "invalid brake-control payload length";
+        return false;
+    }
+
+    brake_state = response.payload[0];
+    return true;
+}
+
+bool Gripper::brakeRelease(uint8_t& brake_state)
+{
+    return brakeControl(BrakeAction::Release, brake_state);
+}
+
+bool Gripper::brakeEngage(uint8_t& brake_state)
+{
+    return brakeControl(BrakeAction::Engage, brake_state);
+}
+
+bool Gripper::brakeReadState(uint8_t& brake_state)
+{
+    return brakeControl(BrakeAction::ReadState, brake_state);
+}
+
+
 bool Gripper::transact(protocol::Command cmd,
                        const std::vector<uint8_t>& payload,
                        protocol::Frame& response,

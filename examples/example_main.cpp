@@ -53,6 +53,43 @@ int main()
     // 示例：相对位置 +4096 count（90度）
     // g.moveByCount(4096, &status);
 
+    // 小心使用：这会把当前位置设为原点
+    
+    uint16_t mech_offset = 0;
+    if (g.setCurrentPositionAsZero(mech_offset))
+    {
+        std::cout << "zero set ok, mechanical offset = " << mech_offset << '\n';
+    }
+    else
+    {
+        std::cerr << "setCurrentPositionAsZero failed: " << g.lastError() << '\n';
+    }
+
+    // 小心使用：恢复默认参数
+    /*
+    if (g.restoreDefaultParameters())
+    {
+        std::cout << "restore defaults ok\n";
+    }
+    else
+    {
+        std::cerr << "restoreDefaultParameters failed: " << g.lastError() << '\n';
+    }
+    */
+
+    // 小心使用：重启从机，发送后设备不会应答
+    /*
+    if (g.reboot())
+    {
+        std::cout << "reboot command sent\n";
+    }
+    else
+    {
+        std::cerr << "reboot failed: " << g.lastError() << '\n';
+    }
+    */
+
+
     g.disconnect();
     return 0;
 }

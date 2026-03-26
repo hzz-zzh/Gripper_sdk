@@ -17,6 +17,10 @@ enum class Command : uint8_t
     ReadRealtime  = 0x0B,
     ClearFault    = 0x0F,
 
+    SetZeroPoint   = 0x1D,
+    EncoderCalib   = 0x1E,
+    RestoreDefault = 0x1F,
+
     WriteQCurrent = 0x20,
     WriteSpeed    = 0x21,
     MoveAbsolute  = 0x22,

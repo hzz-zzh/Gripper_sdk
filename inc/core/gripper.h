@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace gripper
 {
@@ -49,6 +50,13 @@ struct RealtimeStatus
     uint8_t fault_code = 0;
 };
 
+enum class BrakeAction : uint8_t
+{
+    Release   = 0x00,
+    Engage    = 0x01,
+    ReadState = 0xFF
+};
+
 class Gripper
 {
 public:
@@ -77,6 +85,15 @@ public:
     bool moveByCount(int32_t delta_count, RealtimeStatus* out = nullptr);
     bool goHomeShortest(RealtimeStatus* out = nullptr);
     bool motorOff(RealtimeStatus* out = nullptr);
+
+    // 第一批补充命令
+    bool reboot();
+    bool setCurrentPositionAsZero(uint16_t& mechanical_offset);
+    bool restoreDefaultParameters();
+    bool brakeControl(BrakeAction action, uint8_t& brake_state);
+    bool brakeRelease(uint8_t& brake_state);
+    bool brakeEngage(uint8_t& brake_state);
+    bool brakeReadState(uint8_t& brake_state);
 
 private:
     bool transact(protocol::Command cmd,
