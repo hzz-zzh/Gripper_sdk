@@ -7,6 +7,12 @@
 
 namespace gripper
 {
+namespace
+{
+constexpr int32_t kInternalOpenPositionCount = -53000;
+constexpr int32_t kInternalClosePositionCount = -3000;
+}
+
 GripperDevice::GripperDevice(const GripperDeviceConfig& config)
     : config_(config),
       motor_(config.device_address),
@@ -287,9 +293,9 @@ bool GripperDevice::moveToPercent(float percent, RealtimeStatus* out)
         return false;
     }
 
-    if (config_.fully_open_count == config_.fully_close_count)
+    if (kInternalOpenPositionCount == kInternalClosePositionCount)
     {
-        last_error_ = "invalid gripper config: fully_open_count equals fully_close_count";
+        last_error_ = "invalid internal gripper range";
         return false;
     }
 
@@ -306,12 +312,39 @@ bool GripperDevice::moveToPercent(float percent, RealtimeStatus* out)
 
 bool GripperDevice::open(RealtimeStatus* out)
 {
-    return moveToPercent(100.0f, out);
+    return moveToPosition(kInternalOpenPositionCount, out);
 }
 
 bool GripperDevice::close(RealtimeStatus* out)
 {
-    return moveToPercent(0.0f, out);
+    return moveToPosition(kInternalClosePositionCount, out);
+}
+
+int32_t GripperDevice::percentToCount(float percent) const
+{
+    const float clamped = std::clamp(percent, 0.0f, 100.0f);
+    const float ratio = clamped / 100.0f;
+
+    const float count =
+        static_cast<float>(kInternalClosePositionCount) +
+        ratio * static_cast<float>(kInternalOpenPositionCount - kInternalClosePositionCount);
+
+    return static_cast<int32_t>(std::lround(count));
+}
+
+float GripperDevice::countToPercent(int32_t count) const
+{
+    const int32_t span = kInternalOpenPositionCount - kInternalClosePositionCount;
+    if (span == 0)
+    {
+        return 0.0f;
+    }
+
+    const float ratio =
+        static_cast<float>(count - kInternalClosePositionCount) /
+        static_cast<float>(span);
+
+    return std::clamp(ratio * 100.0f, 0.0f, 100.0f);
 }
 
 bool GripperDevice::stop(RealtimeStatus* out)
@@ -324,33 +357,6 @@ bool GripperDevice::stop(RealtimeStatus* out)
 
     last_error_.clear();
     return true;
-}
-
-int32_t GripperDevice::percentToCount(float percent) const
-{
-    const float clamped = std::clamp(percent, 0.0f, 100.0f);
-    const float ratio = clamped / 100.0f;
-
-    const float count =
-        static_cast<float>(config_.fully_close_count) +
-        ratio * static_cast<float>(config_.fully_open_count - config_.fully_close_count);
-
-    return static_cast<int32_t>(std::lround(count));
-}
-
-float GripperDevice::countToPercent(int32_t count) const
-{
-    const int32_t span = config_.fully_open_count - config_.fully_close_count;
-    if (span == 0)
-    {
-        return 0.0f;
-    }
-
-    const float ratio =
-        static_cast<float>(count - config_.fully_close_count) /
-        static_cast<float>(span);
-
-    return std::clamp(ratio * 100.0f, 0.0f, 100.0f);
 }
 
 bool GripperDevice::readRealtime(RealtimeStatus& out)

@@ -23,9 +23,6 @@ int main(void)
     cfg.baudrate = 115200;
     cfg.device_address = 0x01;
     cfg.timeout_ms = 300;
-    cfg.fully_open_count = 16384;
-    cfg.fully_close_count = 0;
-    cfg.home_count = 0;
 
     gripper_handle_t* h = gripper_create(&cfg);
     if (h == NULL)
@@ -103,7 +100,11 @@ int main(void)
     // }
 
     while(1){
-        gripper_move_to_position(h,-50000);
+        // gripper_move_to_position(h,-40000);
+        gripper_move_to_percent(h, 80.0f);
+        // gripper_close(h);
+        // gripper_open(h);
+        // gripper_stop(h);
     }
 
     gripper_stop(h);

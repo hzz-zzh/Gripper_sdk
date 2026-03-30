@@ -15,10 +15,6 @@ typedef struct
     int baudrate;
     uint8_t device_address;
     int timeout_ms;
-
-    int32_t fully_open_count;
-    int32_t fully_close_count;
-    int32_t home_count;
 } gripper_config_t;
 
 typedef struct

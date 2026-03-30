@@ -14,28 +14,16 @@ struct GripperDeviceConfig
     int baudrate = 115200;
     uint8_t device_address = 0x01;
     int timeout_ms = 200;
-
-    // 夹爪开合映射
-    // 约定：0% = fully_close_count, 100% = fully_open_count
-    int32_t fully_open_count = 0;
-    int32_t fully_close_count = 16384;
-
-    // 预留给上层自定义初始工作位
-    int32_t home_count = 0;
 };
 
 struct GripperInitializeConfig
 {
-    // 用低速朝机械限位搜索，建议填正值
     float search_speed_rpm = 5.0f;
-
-    // +1 / -1，表示“朝哪个方向去找限位”
     int search_direction = +1;
 
     int poll_interval_ms = 20;
     int timeout_ms = 5000;
 
-    // 连续满足以下判据，认为已经碰到机械限位
     float speed_epsilon_rpm = 0.5f;
     float current_threshold_a = 0.6f;
     int32_t position_epsilon_count = 5;
@@ -44,8 +32,6 @@ struct GripperInitializeConfig
     bool clear_fault_before_start = true;
     bool set_zero_after_detect = true;
 
-    // 设零后，从机械限位回退一段安全距离
-    // 这里填正值，实际实现会自动朝“远离限位”的方向回退
     int32_t backoff_count_after_zero = 200;
 };
 

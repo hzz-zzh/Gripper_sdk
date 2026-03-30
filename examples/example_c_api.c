@@ -8,9 +8,6 @@ int main(void)
     cfg.baudrate = 115200;
     cfg.device_address = 0x01;
     cfg.timeout_ms = 300;
-    cfg.fully_open_count = 16384;
-    cfg.fully_close_count = 0;
-    cfg.home_count = 0;
 
     gripper_handle_t* h = gripper_create(&cfg);
     if (h == NULL)

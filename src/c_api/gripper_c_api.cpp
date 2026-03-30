@@ -102,10 +102,6 @@ gripper_handle_t* gripper_create(const gripper_config_t* config)
     cpp_config.baudrate = config->baudrate;
     cpp_config.device_address = config->device_address;
     cpp_config.timeout_ms = config->timeout_ms;
-    cpp_config.fully_open_count = config->fully_open_count;
-    cpp_config.fully_close_count = config->fully_close_count;
-    cpp_config.home_count = config->home_count;
-
     try
     {
         return new gripper_handle(cpp_config);

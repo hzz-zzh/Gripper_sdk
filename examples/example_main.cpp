@@ -55,11 +55,6 @@ int main()
     cfg.device_address = 0x01;
     cfg.timeout_ms = 300;
 
-    // 这里要根据你的夹爪真实边界来改
-    cfg.fully_close_count = 0;
-    cfg.fully_open_count = 16384;
-    cfg.home_count = 0;
-
     gripper::GripperDevice dev(cfg);
 
     if (!dev.connect())
