@@ -56,9 +56,8 @@ int main(void)
 
     gripper_initialize_config_init(&hc);
 
-    /* 下面这些参数需要根据你的机构慢慢调 */
     hc.search_speed_rpm = 100.0f;
-    hc.search_direction = +1;          /* 如果方向反了就改成 -1 */
+    hc.search_direction = +1;        
     hc.poll_interval_ms = 20;
     hc.timeout_ms = 5000;
     hc.speed_epsilon_rpm = 0.5f;
@@ -80,7 +79,6 @@ int main(void)
 
     printf("homing ok\n");
 
-    // /* Homing 完成后，做一个小动作验证 */
     // if (gripper_move_to_percent(h, 10.0f) != GRIPPER_API_OK)
     // {
     //     printf("move_to_percent(10) failed: %s\n", gripper_get_last_error(h));
