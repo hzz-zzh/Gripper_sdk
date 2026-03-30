@@ -51,6 +51,26 @@ bool copy_status(const gripper::RealtimeStatus& in, gripper_realtime_status_t* o
     return true;
 }
 
+bool copy_homing_result(const gripper::GripperHomingResult& in,
+                        gripper_homing_result_t* out)
+{
+    if (out == nullptr)
+    {
+        return false;
+    }
+
+    out->limit_detected = in.limit_detected ? 1 : 0;
+    out->zero_set = in.zero_set ? 1 : 0;
+    out->backoff_done = in.backoff_done ? 1 : 0;
+
+    out->detect_samples = in.detect_samples;
+    out->limit_count_before_zero = in.limit_count_before_zero;
+    out->mechanical_offset = in.mechanical_offset;
+
+    copy_status(in.final_status, &out->final_status);
+    return true;
+}
+
 void set_error(gripper_handle* handle, const std::string& err)
 {
     if (handle != nullptr)
@@ -136,6 +156,70 @@ int gripper_is_connected(gripper_handle_t* handle)
     }
 
     return handle->device.isConnected() ? 1 : 0;
+}
+
+void gripper_homing_config_init(gripper_homing_config_t* config)
+{
+    if (config == nullptr)
+    {
+        return;
+    }
+
+    config->search_speed_rpm = 10.0f;
+    config->search_direction = 1;
+
+    config->poll_interval_ms = 50;
+    config->timeout_ms = 5000;
+
+    config->speed_epsilon_rpm = 0.5f;
+    config->current_threshold_a = 2.5f;
+    config->position_epsilon_count = 20;
+    config->detect_consecutive_samples = 20;
+
+    config->clear_fault_before_start = 1;
+    config->set_zero_after_detect = 1;
+    config->backoff_count_after_zero = 10000;
+}
+
+int gripper_homing(gripper_handle_t* handle,
+                   const gripper_homing_config_t* config,
+                   gripper_homing_result_t* out_result)
+{
+    if (handle == nullptr || config == nullptr)
+    {
+        return GRIPPER_API_INVALID_ARGUMENT;
+    }
+
+    gripper::GripperHomingConfig cpp_config;
+    cpp_config.search_speed_rpm = config->search_speed_rpm;
+    cpp_config.search_direction = config->search_direction;
+
+    cpp_config.poll_interval_ms = config->poll_interval_ms;
+    cpp_config.timeout_ms = config->timeout_ms;
+
+    cpp_config.speed_epsilon_rpm = config->speed_epsilon_rpm;
+    cpp_config.current_threshold_a = config->current_threshold_a;
+    cpp_config.position_epsilon_count = config->position_epsilon_count;
+    cpp_config.detect_consecutive_samples = config->detect_consecutive_samples;
+
+    cpp_config.clear_fault_before_start = (config->clear_fault_before_start != 0);
+    cpp_config.set_zero_after_detect = (config->set_zero_after_detect != 0);
+    cpp_config.backoff_count_after_zero = config->backoff_count_after_zero;
+
+    gripper::GripperHomingResult cpp_result{};
+    if (!handle->device.homing(cpp_config, &cpp_result))
+    {
+        set_error_from_device(handle);
+        return GRIPPER_API_ERROR;
+    }
+
+    if (out_result != nullptr)
+    {
+        copy_homing_result(cpp_result, out_result);
+    }
+
+    set_error(handle, "");
+    return GRIPPER_API_OK;
 }
 
 int gripper_open(gripper_handle_t* handle)

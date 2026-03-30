@@ -34,6 +34,25 @@ add_executable(example_c_api
     examples/example_c_api.c
 )
 
+add_executable(example_homing_c_api
+    examples/example_homing_c_api.c
+)
+
+target_link_libraries(example_homing_c_api
+    PRIVATE gripper_sdk
+)
+
+target_include_directories(example_homing_c_api
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/inc
+)
+
+# 如果你目前 gripper_sdk 还没有把这些依赖正确向外传递，
+# 先临时补上，避免静态链接时报错
+if(UNIX AND NOT APPLE)
+    target_link_libraries(example_homing_c_api PRIVATE stdc++ m)
+endif()
+
 target_link_libraries(example_c_api
     PRIVATE gripper_sdk
 )

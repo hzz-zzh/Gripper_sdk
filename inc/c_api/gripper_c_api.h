@@ -47,6 +47,37 @@ typedef struct
     uint8_t fault_code;
 } gripper_realtime_status_t;
 
+typedef struct
+{
+    float search_speed_rpm;
+    int search_direction;
+
+    int poll_interval_ms;
+    int timeout_ms;
+
+    float speed_epsilon_rpm;
+    float current_threshold_a;
+    int32_t position_epsilon_count;
+    int detect_consecutive_samples;
+
+    int clear_fault_before_start;
+    int set_zero_after_detect;
+    int32_t backoff_count_after_zero;
+} gripper_homing_config_t;
+
+typedef struct
+{
+    int limit_detected;
+    int zero_set;
+    int backoff_done;
+
+    int detect_samples;
+    int32_t limit_count_before_zero;
+    uint16_t mechanical_offset;
+
+    gripper_realtime_status_t final_status;
+} gripper_homing_result_t;
+
 enum
 {
     GRIPPER_API_OK = 0,
@@ -69,6 +100,11 @@ int gripper_stop(gripper_handle_t* handle);
 int gripper_read_realtime(gripper_handle_t* handle, gripper_realtime_status_t* out_status);
 
 int gripper_reboot(gripper_handle_t* handle);
+
+void gripper_homing_config_init(gripper_homing_config_t* config);
+int gripper_homing(gripper_handle_t* handle,
+                   const gripper_homing_config_t* config,
+                   gripper_homing_result_t* out_result);
 
 const char* gripper_get_last_error(gripper_handle_t* handle);
 
