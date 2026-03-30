@@ -179,6 +179,10 @@ public:
                   RealtimeStatus* out = nullptr);
 
     bool moveToCount(int32_t target_count, RealtimeStatus* out = nullptr);
+    bool moveToCountWithLimits(int32_t target_count,
+                               float max_speed_rpm,
+                               float max_current_amp,
+                               RealtimeStatus* out = nullptr);
     bool moveByCount(int32_t delta_count, RealtimeStatus* out = nullptr);
     bool goHomeShortest(RealtimeStatus* out = nullptr);
     bool motorOff(RealtimeStatus* out = nullptr);

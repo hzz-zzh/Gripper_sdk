@@ -267,6 +267,30 @@ bool GripperDevice::moveToPosition(int32_t target_position, RealtimeStatus* out)
     return true;
 }
 
+bool GripperDevice::moveToPositionWithLimits(int32_t target_position,
+                                             float max_speed_rpm,
+                                             float max_current_amp,
+                                             RealtimeStatus* out)
+{
+    if (!initialized_)
+    {
+        last_error_ = "gripper not initialized";
+        return false;
+    }
+
+    if (!motor_.moveToCountWithLimits(target_position,
+                                      max_speed_rpm,
+                                      max_current_amp,
+                                      out))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    last_error_.clear();
+    return true;
+}
+
 bool GripperDevice::moveRelative(int32_t delta_position, RealtimeStatus* out)
 {
     if (!initialized_)

@@ -95,6 +95,10 @@ int gripper_initialize(gripper_handle_t* handle,
 int gripper_is_initialized(gripper_handle_t* handle);
 
 int gripper_move_to_position(gripper_handle_t* handle, int32_t target_position);
+int gripper_move_to_position_with_limits(gripper_handle_t* handle,
+                                         int32_t target_position,
+                                         float max_speed_rpm,
+                                         float max_current_amp);
 int gripper_move_relative(gripper_handle_t* handle, int32_t delta_position);
 
 int gripper_open(gripper_handle_t* handle);

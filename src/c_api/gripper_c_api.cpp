@@ -245,6 +245,28 @@ int gripper_move_to_position(gripper_handle_t* handle, int32_t target_position)
     return GRIPPER_API_OK;
 }
 
+int gripper_move_to_position_with_limits(gripper_handle_t* handle,
+                                         int32_t target_position,
+                                         float max_speed_rpm,
+                                         float max_current_amp)
+{
+    if (handle == nullptr)
+    {
+        return GRIPPER_API_INVALID_ARGUMENT;
+    }
+
+    if (!handle->device.moveToPositionWithLimits(target_position,
+                                                 max_speed_rpm,
+                                                 max_current_amp))
+    {
+        set_error_from_device(handle);
+        return GRIPPER_API_ERROR;
+    }
+
+    set_error(handle, "");
+    return GRIPPER_API_OK;
+}
+
 int gripper_move_relative(gripper_handle_t* handle, int32_t delta_position)
 {
     if (handle == nullptr)

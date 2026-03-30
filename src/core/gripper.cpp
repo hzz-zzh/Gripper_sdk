@@ -4,6 +4,8 @@
 #include <chrono>
 #include <utility>
 #include <algorithm>
+#include <limits>
+#include <cmath>
 #include <thread>
 #include <chrono>
 
@@ -11,6 +13,42 @@ namespace gripper
 {
 namespace
 {
+uint32_t convertSpeedLimitRpmToRaw(float rpm, bool& ok)
+{
+    ok = false;
+    if (!(rpm > 0.0f))
+    {
+        return 0;
+    }
+
+    const float raw = std::round(rpm * 100.0f);
+    if (raw < 0.0f || raw > static_cast<float>(std::numeric_limits<uint32_t>::max()))
+    {
+        return 0;
+    }
+
+    ok = true;
+    return static_cast<uint32_t>(raw);
+}
+
+uint32_t convertCurrentLimitAmpToRaw(float current_amp, bool& ok)
+{
+    ok = false;
+    if (!(current_amp > 0.0f))
+    {
+        return 0;
+    }
+
+    const float raw = std::round(current_amp * 1000.0f);
+    if (raw < 0.0f || raw > static_cast<float>(std::numeric_limits<uint32_t>::max()))
+    {
+        return 0;
+    }
+
+    ok = true;
+    return static_cast<uint32_t>(raw);
+}
+
 bool readExact(ITransport& transport,
                uint8_t* buffer,
                std::size_t size,
@@ -222,6 +260,50 @@ bool Gripper::moveToCount(int32_t target_count, RealtimeStatus* out)
     }
 
     return true;
+}
+
+bool Gripper::moveToCountWithLimits(int32_t target_count,
+                                    float max_speed_rpm,
+                                    float max_current_amp,
+                                    RealtimeStatus* out)
+{
+    MotionControlParameters params{};
+    if (!readMotionControlParameters(params))
+    {
+        return false;
+    }
+
+    if (max_speed_rpm > 0.0f)
+    {
+        bool ok = false;
+        const uint32_t raw_limit = convertSpeedLimitRpmToRaw(max_speed_rpm, ok);
+        if (!ok)
+        {
+            last_error_ = "invalid max_speed_rpm";
+            return false;
+        }
+        params.position_output_limit = raw_limit;
+    }
+
+    if (max_current_amp > 0.0f)
+    {
+        bool ok = false;
+        const uint32_t raw_limit = convertCurrentLimitAmpToRaw(max_current_amp, ok);
+        if (!ok)
+        {
+            last_error_ = "invalid max_current_amp";
+            return false;
+        }
+        params.speed_output_limit = raw_limit;
+    }
+
+    if ((max_speed_rpm > 0.0f || max_current_amp > 0.0f) &&
+        !writeMotionControlParametersTemp(params, nullptr))
+    {
+        return false;
+    }
+
+    return moveToCount(target_count, out);
 }
 
 bool Gripper::moveByCount(int32_t delta_count, RealtimeStatus* out)

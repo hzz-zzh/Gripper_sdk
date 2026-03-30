@@ -65,6 +65,10 @@ public:
     const std::string& lastError() const;
 
     bool moveToPosition(int32_t target_position, RealtimeStatus* out = nullptr);
+    bool moveToPositionWithLimits(int32_t target_position,
+                                  float max_speed_rpm = 0.0f,
+                                  float max_current_amp = 0.0f,
+                                  RealtimeStatus* out = nullptr);
     bool moveRelative(int32_t delta_position, RealtimeStatus* out = nullptr);
 
     bool moveToPercent(float percent, RealtimeStatus* out = nullptr);
