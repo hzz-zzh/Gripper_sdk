@@ -54,10 +54,10 @@ int main(void)
         printf("read_realtime before homing failed: %s\n", gripper_get_last_error(h));
     }
 
-    gripper_homing_config_t hc;
-    gripper_homing_result_t hr;
+    gripper_initialize_config_t hc;
+    gripper_initialize_result_t hr;
 
-    gripper_homing_config_init(&hc);
+    gripper_initialize_config_init(&hc);
 
     /* 下面这些参数需要根据你的机构慢慢调 */
     hc.search_speed_rpm = 100.0f;
@@ -73,7 +73,7 @@ int main(void)
     hc.backoff_count_after_zero = -15000;
 
     printf("start homing...\n");
-    if (gripper_homing(h, &hc, &hr) != GRIPPER_API_OK)
+    if (gripper_initialize(h, &hc, &hr) != GRIPPER_API_OK)
     {
         printf("homing failed: %s\n", gripper_get_last_error(h));
         gripper_disconnect(h);
@@ -82,35 +82,28 @@ int main(void)
     }
 
     printf("homing ok\n");
-    printf("limit_detected=%d, zero_set=%d, backoff_done=%d\n",
-           hr.limit_detected,
-           hr.zero_set,
-           hr.backoff_done);
-    printf("detect_samples=%d, limit_count_before_zero=%d, mechanical_offset=%u\n",
-           hr.detect_samples,
-           hr.limit_count_before_zero,
-           hr.mechanical_offset);
 
-    printf("final status after homing:\n");
-    print_status(&hr.final_status);
+    // /* Homing 完成后，做一个小动作验证 */
+    // if (gripper_move_to_percent(h, 10.0f) != GRIPPER_API_OK)
+    // {
+    //     printf("move_to_percent(10) failed: %s\n", gripper_get_last_error(h));
+    // }
+    // else
+    // {
+    //     gripper_realtime_status_t after_move;
+    //     if (gripper_read_realtime(h, &after_move) == GRIPPER_API_OK)
+    //     {
+    //         printf("after move_to_percent(10):\n");
+    //         print_status(&after_move);
+    //     }
+    //     else
+    //     {
+    //         printf("read_realtime after move failed: %s\n", gripper_get_last_error(h));
+    //     }
+    // }
 
-    /* Homing 完成后，做一个小动作验证 */
-    if (gripper_move_to_percent(h, 10.0f) != GRIPPER_API_OK)
-    {
-        printf("move_to_percent(10) failed: %s\n", gripper_get_last_error(h));
-    }
-    else
-    {
-        gripper_realtime_status_t after_move;
-        if (gripper_read_realtime(h, &after_move) == GRIPPER_API_OK)
-        {
-            printf("after move_to_percent(10):\n");
-            print_status(&after_move);
-        }
-        else
-        {
-            printf("read_realtime after move failed: %s\n", gripper_get_last_error(h));
-        }
+    while(1){
+        gripper_move_to_position(h,-50000);
     }
 
     gripper_stop(h);

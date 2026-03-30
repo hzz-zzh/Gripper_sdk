@@ -20,18 +20,22 @@ struct GripperDeviceConfig
     int32_t fully_open_count = 0;
     int32_t fully_close_count = 16384;
 
-    // 预留给后续 home() 使用
+    // 预留给上层自定义初始工作位
     int32_t home_count = 0;
 };
 
-struct GripperHomingConfig
+struct GripperInitializeConfig
 {
+    // 用低速朝机械限位搜索，建议填正值
     float search_speed_rpm = 5.0f;
+
+    // +1 / -1，表示“朝哪个方向去找限位”
     int search_direction = +1;
 
     int poll_interval_ms = 20;
     int timeout_ms = 5000;
 
+    // 连续满足以下判据，认为已经碰到机械限位
     float speed_epsilon_rpm = 0.5f;
     float current_threshold_a = 0.6f;
     int32_t position_epsilon_count = 5;
@@ -39,10 +43,13 @@ struct GripperHomingConfig
 
     bool clear_fault_before_start = true;
     bool set_zero_after_detect = true;
+
+    // 设零后，从机械限位回退一段安全距离
+    // 这里填正值，实际实现会自动朝“远离限位”的方向回退
     int32_t backoff_count_after_zero = 200;
 };
 
-struct GripperHomingResult
+struct GripperInitializeResult
 {
     bool limit_detected = false;
     bool zero_set = false;
@@ -64,18 +71,20 @@ public:
     void disconnect();
     bool isConnected() const;
 
-    bool isHomed() const;
-    void invalidateHoming();
+    bool initialize(const GripperInitializeConfig& config,
+                    GripperInitializeResult* out = nullptr);
+    bool isInitialized() const;
+    void invalidateInitialization();
 
     const std::string& lastError() const;
+
+    bool moveToPosition(int32_t target_position, RealtimeStatus* out = nullptr);
+    bool moveRelative(int32_t delta_position, RealtimeStatus* out = nullptr);
 
     bool moveToPercent(float percent, RealtimeStatus* out = nullptr);
     bool open(RealtimeStatus* out = nullptr);
     bool close(RealtimeStatus* out = nullptr);
     bool stop(RealtimeStatus* out = nullptr);
-
-    bool homing(const GripperHomingConfig& config,
-                GripperHomingResult* out = nullptr);
 
     int32_t percentToCount(float percent) const;
     float countToPercent(int32_t count) const;
@@ -90,7 +99,7 @@ private:
     GripperDeviceConfig config_;
     Gripper motor_;
     std::string last_error_;
-    bool homed_;
+    bool initialized_;
 };
 }
 

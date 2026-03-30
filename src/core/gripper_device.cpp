@@ -11,7 +11,7 @@ GripperDevice::GripperDevice(const GripperDeviceConfig& config)
     : config_(config),
       motor_(config.device_address),
       last_error_(),
-      homed_(false)
+      initialized_(false)
 {
     motor_.setTimeoutMs(config_.timeout_ms);
 }
@@ -24,7 +24,7 @@ bool GripperDevice::connect()
         return false;
     }
 
-    homed_ = false;
+    initialized_ = false;
     last_error_.clear();
     return true;
 }
@@ -32,7 +32,7 @@ bool GripperDevice::connect()
 void GripperDevice::disconnect()
 {
     motor_.disconnect();
-    homed_ = false;
+    initialized_ = false;
 }
 
 bool GripperDevice::isConnected() const
@@ -40,14 +40,14 @@ bool GripperDevice::isConnected() const
     return motor_.isConnected();
 }
 
-bool GripperDevice::isHomed() const
+bool GripperDevice::isInitialized() const
 {
-    return homed_;
+    return initialized_;
 }
 
-void GripperDevice::invalidateHoming()
+void GripperDevice::invalidateInitialization()
 {
-    homed_ = false;
+    initialized_ = false;
 }
 
 const std::string& GripperDevice::lastError() const
@@ -55,136 +55,50 @@ const std::string& GripperDevice::lastError() const
     return last_error_;
 }
 
-bool GripperDevice::moveToPercent(float percent, RealtimeStatus* out)
-{
-    if (!homed_)
-    {
-        last_error_ = "gripper not homed";
-        return false;
-    }
-
-    if (config_.fully_open_count == config_.fully_close_count)
-    {
-        last_error_ = "invalid gripper config: fully_open_count equals fully_close_count";
-        return false;
-    }
-
-    const int32_t target_count = percentToCount(percent);
-    if (!motor_.moveToCount(target_count, out))
-    {
-        setLastErrorFromMotor();
-        return false;
-    }
-
-    last_error_.clear();
-    return true;
-}
-
-bool GripperDevice::open(RealtimeStatus* out)
-{
-    return moveToPercent(100.0f, out);
-}
-
-bool GripperDevice::close(RealtimeStatus* out)
-{
-    return moveToPercent(0.0f, out);
-}
-
-bool GripperDevice::stop(RealtimeStatus* out)
-{
-    if (!motor_.motorOff(out))
-    {
-        setLastErrorFromMotor();
-        return false;
-    }
-
-    last_error_.clear();
-    return true;
-}
-
-int32_t GripperDevice::percentToCount(float percent) const
-{
-    const float clamped = std::clamp(percent, 0.0f, 100.0f);
-    const float ratio = clamped / 100.0f;
-
-    const float count =
-        static_cast<float>(config_.fully_close_count) +
-        ratio * static_cast<float>(config_.fully_open_count - config_.fully_close_count);
-
-    return static_cast<int32_t>(std::lround(count));
-}
-
-float GripperDevice::countToPercent(int32_t count) const
-{
-    const int32_t span = config_.fully_open_count - config_.fully_close_count;
-    if (span == 0)
-    {
-        return 0.0f;
-    }
-
-    const float ratio =
-        static_cast<float>(count - config_.fully_close_count) /
-        static_cast<float>(span);
-
-    return std::clamp(ratio * 100.0f, 0.0f, 100.0f);
-}
-
-bool GripperDevice::readRealtime(RealtimeStatus& out)
-{
-    if (!motor_.readRealtime(out))
-    {
-        setLastErrorFromMotor();
-        return false;
-    }
-
-    last_error_.clear();
-    return true;
-}
-
-bool GripperDevice::homing(const GripperHomingConfig& config,
-                           GripperHomingResult* out)
+bool GripperDevice::initialize(const GripperInitializeConfig& config,
+                               GripperInitializeResult* out)
 {
     if (config.search_direction != 1 && config.search_direction != -1)
     {
-        last_error_ = "invalid homing config: search_direction must be +1 or -1";
+        last_error_ = "invalid initialize config: search_direction must be +1 or -1";
         return false;
     }
 
     if (config.search_speed_rpm <= 0.0f)
     {
-        last_error_ = "invalid homing config: search_speed_rpm must be > 0";
+        last_error_ = "invalid initialize config: search_speed_rpm must be > 0";
         return false;
     }
 
     if (config.poll_interval_ms <= 0)
     {
-        last_error_ = "invalid homing config: poll_interval_ms must be > 0";
+        last_error_ = "invalid initialize config: poll_interval_ms must be > 0";
         return false;
     }
 
     if (config.timeout_ms <= 0)
     {
-        last_error_ = "invalid homing config: timeout_ms must be > 0";
+        last_error_ = "invalid initialize config: timeout_ms must be > 0";
         return false;
     }
 
     if (config.detect_consecutive_samples <= 0)
     {
-        last_error_ = "invalid homing config: detect_consecutive_samples must be > 0";
+        last_error_ = "invalid initialize config: detect_consecutive_samples must be > 0";
         return false;
     }
 
     if (config.position_epsilon_count < 0)
     {
-        last_error_ = "invalid homing config: position_epsilon_count must be >= 0";
+        last_error_ = "invalid initialize config: position_epsilon_count must be >= 0";
         return false;
     }
 
-    homed_ = false;
+    initialized_ = false;
 
     if (out != nullptr)
     {
-        *out = GripperHomingResult{};
+        *out = GripperInitializeResult{};
     }
 
     if (config.clear_fault_before_start)
@@ -228,7 +142,7 @@ bool GripperDevice::homing(const GripperHomingConfig& config,
         if (latest.fault_code != 0)
         {
             motor_.motorOff(nullptr);
-            last_error_ = "fault occurred during homing";
+            last_error_ = "fault occurred during initialize";
             return false;
         }
 
@@ -237,6 +151,7 @@ bool GripperDevice::homing(const GripperHomingConfig& config,
         {
             delta_count = std::abs(latest.multi_turn_count - prev_count);
         }
+
         prev_count = latest.multi_turn_count;
         has_prev_count = true;
 
@@ -317,15 +232,137 @@ bool GripperDevice::homing(const GripperHomingConfig& config,
                 out->final_status = latest;
             }
 
-            homed_ = true;
+            initialized_ = true;
             last_error_.clear();
             return true;
         }
     }
 
     motor_.motorOff(nullptr);
-    last_error_ = "homing timeout";
+    last_error_ = "initialize timeout";
     return false;
+}
+
+bool GripperDevice::moveToPosition(int32_t target_position, RealtimeStatus* out)
+{
+    if (!initialized_)
+    {
+        last_error_ = "gripper not initialized";
+        return false;
+    }
+
+    if (!motor_.moveToCount(target_position, out))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    last_error_.clear();
+    return true;
+}
+
+bool GripperDevice::moveRelative(int32_t delta_position, RealtimeStatus* out)
+{
+    if (!initialized_)
+    {
+        last_error_ = "gripper not initialized";
+        return false;
+    }
+
+    if (!motor_.moveByCount(delta_position, out))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    last_error_.clear();
+    return true;
+}
+
+bool GripperDevice::moveToPercent(float percent, RealtimeStatus* out)
+{
+    if (!initialized_)
+    {
+        last_error_ = "gripper not initialized";
+        return false;
+    }
+
+    if (config_.fully_open_count == config_.fully_close_count)
+    {
+        last_error_ = "invalid gripper config: fully_open_count equals fully_close_count";
+        return false;
+    }
+
+    const int32_t target_count = percentToCount(percent);
+    if (!motor_.moveToCount(target_count, out))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    last_error_.clear();
+    return true;
+}
+
+bool GripperDevice::open(RealtimeStatus* out)
+{
+    return moveToPercent(100.0f, out);
+}
+
+bool GripperDevice::close(RealtimeStatus* out)
+{
+    return moveToPercent(0.0f, out);
+}
+
+bool GripperDevice::stop(RealtimeStatus* out)
+{
+    if (!motor_.motorOff(out))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    last_error_.clear();
+    return true;
+}
+
+int32_t GripperDevice::percentToCount(float percent) const
+{
+    const float clamped = std::clamp(percent, 0.0f, 100.0f);
+    const float ratio = clamped / 100.0f;
+
+    const float count =
+        static_cast<float>(config_.fully_close_count) +
+        ratio * static_cast<float>(config_.fully_open_count - config_.fully_close_count);
+
+    return static_cast<int32_t>(std::lround(count));
+}
+
+float GripperDevice::countToPercent(int32_t count) const
+{
+    const int32_t span = config_.fully_open_count - config_.fully_close_count;
+    if (span == 0)
+    {
+        return 0.0f;
+    }
+
+    const float ratio =
+        static_cast<float>(count - config_.fully_close_count) /
+        static_cast<float>(span);
+
+    return std::clamp(ratio * 100.0f, 0.0f, 100.0f);
+}
+
+bool GripperDevice::readRealtime(RealtimeStatus& out)
+{
+    if (!motor_.readRealtime(out))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    last_error_.clear();
+    return true;
 }
 
 Gripper& GripperDevice::motor()

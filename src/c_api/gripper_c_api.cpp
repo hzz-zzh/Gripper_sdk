@@ -51,8 +51,8 @@ bool copy_status(const gripper::RealtimeStatus& in, gripper_realtime_status_t* o
     return true;
 }
 
-bool copy_homing_result(const gripper::GripperHomingResult& in,
-                        gripper_homing_result_t* out)
+bool copy_initialize_result(const gripper::GripperInitializeResult& in,
+                            gripper_initialize_result_t* out)
 {
     if (out == nullptr)
     {
@@ -158,49 +158,39 @@ int gripper_is_connected(gripper_handle_t* handle)
     return handle->device.isConnected() ? 1 : 0;
 }
 
-int gripper_is_homed(gripper_handle_t* handle)
-{
-    if (handle == nullptr)
-    {
-        return 0;
-    }
-
-    return handle->device.isHomed() ? 1 : 0;
-}
-
-void gripper_homing_config_init(gripper_homing_config_t* config)
+void gripper_initialize_config_init(gripper_initialize_config_t* config)
 {
     if (config == nullptr)
     {
         return;
     }
 
-    config->search_speed_rpm = 100.0f;
+    config->search_speed_rpm = 5.0f;
     config->search_direction = +1;
 
     config->poll_interval_ms = 20;
     config->timeout_ms = 5000;
 
     config->speed_epsilon_rpm = 0.5f;
-    config->current_threshold_a = 0.5f;
+    config->current_threshold_a = 0.6f;
     config->position_epsilon_count = 5;
     config->detect_consecutive_samples = 4;
 
     config->clear_fault_before_start = 1;
     config->set_zero_after_detect = 1;
-    config->backoff_count_after_zero = -10000;
+    config->backoff_count_after_zero = 200;
 }
 
-int gripper_homing(gripper_handle_t* handle,
-                   const gripper_homing_config_t* config,
-                   gripper_homing_result_t* out_result)
+int gripper_initialize(gripper_handle_t* handle,
+                       const gripper_initialize_config_t* config,
+                       gripper_initialize_result_t* out_result)
 {
     if (handle == nullptr || config == nullptr)
     {
         return GRIPPER_API_INVALID_ARGUMENT;
     }
 
-    gripper::GripperHomingConfig cpp_config;
+    gripper::GripperInitializeConfig cpp_config;
     cpp_config.search_speed_rpm = config->search_speed_rpm;
     cpp_config.search_direction = config->search_direction;
 
@@ -216,8 +206,8 @@ int gripper_homing(gripper_handle_t* handle,
     cpp_config.set_zero_after_detect = (config->set_zero_after_detect != 0);
     cpp_config.backoff_count_after_zero = config->backoff_count_after_zero;
 
-    gripper::GripperHomingResult cpp_result{};
-    if (!handle->device.homing(cpp_config, &cpp_result))
+    gripper::GripperInitializeResult cpp_result{};
+    if (!handle->device.initialize(cpp_config, &cpp_result))
     {
         set_error_from_device(handle);
         return GRIPPER_API_ERROR;
@@ -225,7 +215,51 @@ int gripper_homing(gripper_handle_t* handle,
 
     if (out_result != nullptr)
     {
-        copy_homing_result(cpp_result, out_result);
+        copy_initialize_result(cpp_result, out_result);
+    }
+
+    set_error(handle, "");
+    return GRIPPER_API_OK;
+}
+
+int gripper_is_initialized(gripper_handle_t* handle)
+{
+    if (handle == nullptr)
+    {
+        return 0;
+    }
+
+    return handle->device.isInitialized() ? 1 : 0;
+}
+
+int gripper_move_to_position(gripper_handle_t* handle, int32_t target_position)
+{
+    if (handle == nullptr)
+    {
+        return GRIPPER_API_INVALID_ARGUMENT;
+    }
+
+    if (!handle->device.moveToPosition(target_position))
+    {
+        set_error_from_device(handle);
+        return GRIPPER_API_ERROR;
+    }
+
+    set_error(handle, "");
+    return GRIPPER_API_OK;
+}
+
+int gripper_move_relative(gripper_handle_t* handle, int32_t delta_position)
+{
+    if (handle == nullptr)
+    {
+        return GRIPPER_API_INVALID_ARGUMENT;
+    }
+
+    if (!handle->device.moveRelative(delta_position))
+    {
+        set_error_from_device(handle);
+        return GRIPPER_API_ERROR;
     }
 
     set_error(handle, "");
@@ -332,7 +366,7 @@ int gripper_reboot(gripper_handle_t* handle)
         return GRIPPER_API_ERROR;
     }
 
-    handle->device.invalidateHoming();
+    handle->device.invalidateInitialization();
     set_error(handle, "");
     return GRIPPER_API_OK;
 }

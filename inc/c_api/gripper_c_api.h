@@ -63,7 +63,7 @@ typedef struct
     int clear_fault_before_start;
     int set_zero_after_detect;
     int32_t backoff_count_after_zero;
-} gripper_homing_config_t;
+} gripper_initialize_config_t;
 
 typedef struct
 {
@@ -76,7 +76,7 @@ typedef struct
     uint16_t mechanical_offset;
 
     gripper_realtime_status_t final_status;
-} gripper_homing_result_t;
+} gripper_initialize_result_t;
 
 enum
 {
@@ -92,7 +92,14 @@ int gripper_connect(gripper_handle_t* handle);
 void gripper_disconnect(gripper_handle_t* handle);
 int gripper_is_connected(gripper_handle_t* handle);
 
-int gripper_is_homed(gripper_handle_t* handle);
+void gripper_initialize_config_init(gripper_initialize_config_t* config);
+int gripper_initialize(gripper_handle_t* handle,
+                       const gripper_initialize_config_t* config,
+                       gripper_initialize_result_t* out_result);
+int gripper_is_initialized(gripper_handle_t* handle);
+
+int gripper_move_to_position(gripper_handle_t* handle, int32_t target_position);
+int gripper_move_relative(gripper_handle_t* handle, int32_t delta_position);
 
 int gripper_open(gripper_handle_t* handle);
 int gripper_close(gripper_handle_t* handle);
@@ -102,11 +109,6 @@ int gripper_stop(gripper_handle_t* handle);
 int gripper_read_realtime(gripper_handle_t* handle, gripper_realtime_status_t* out_status);
 
 int gripper_reboot(gripper_handle_t* handle);
-
-void gripper_homing_config_init(gripper_homing_config_t* config);
-int gripper_homing(gripper_handle_t* handle,
-                   const gripper_homing_config_t* config,
-                   gripper_homing_result_t* out_result);
 
 const char* gripper_get_last_error(gripper_handle_t* handle);
 
