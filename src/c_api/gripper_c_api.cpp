@@ -158,6 +158,16 @@ int gripper_is_connected(gripper_handle_t* handle)
     return handle->device.isConnected() ? 1 : 0;
 }
 
+int gripper_is_homed(gripper_handle_t* handle)
+{
+    if (handle == nullptr)
+    {
+        return 0;
+    }
+
+    return handle->device.isHomed() ? 1 : 0;
+}
+
 void gripper_homing_config_init(gripper_homing_config_t* config)
 {
     if (config == nullptr)
@@ -165,20 +175,20 @@ void gripper_homing_config_init(gripper_homing_config_t* config)
         return;
     }
 
-    config->search_speed_rpm = 10.0f;
-    config->search_direction = 1;
+    config->search_speed_rpm = 100.0f;
+    config->search_direction = +1;
 
-    config->poll_interval_ms = 50;
+    config->poll_interval_ms = 20;
     config->timeout_ms = 5000;
 
     config->speed_epsilon_rpm = 0.5f;
-    config->current_threshold_a = 2.5f;
-    config->position_epsilon_count = 20;
-    config->detect_consecutive_samples = 20;
+    config->current_threshold_a = 0.5f;
+    config->position_epsilon_count = 5;
+    config->detect_consecutive_samples = 4;
 
     config->clear_fault_before_start = 1;
     config->set_zero_after_detect = 1;
-    config->backoff_count_after_zero = 10000;
+    config->backoff_count_after_zero = -10000;
 }
 
 int gripper_homing(gripper_handle_t* handle,
@@ -322,6 +332,7 @@ int gripper_reboot(gripper_handle_t* handle)
         return GRIPPER_API_ERROR;
     }
 
+    handle->device.invalidateHoming();
     set_error(handle, "");
     return GRIPPER_API_OK;
 }

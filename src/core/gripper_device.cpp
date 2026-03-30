@@ -10,7 +10,8 @@ namespace gripper
 GripperDevice::GripperDevice(const GripperDeviceConfig& config)
     : config_(config),
       motor_(config.device_address),
-      last_error_()
+      last_error_(),
+      homed_(false)
 {
     motor_.setTimeoutMs(config_.timeout_ms);
 }
@@ -23,6 +24,7 @@ bool GripperDevice::connect()
         return false;
     }
 
+    homed_ = false;
     last_error_.clear();
     return true;
 }
@@ -30,11 +32,22 @@ bool GripperDevice::connect()
 void GripperDevice::disconnect()
 {
     motor_.disconnect();
+    homed_ = false;
 }
 
 bool GripperDevice::isConnected() const
 {
     return motor_.isConnected();
+}
+
+bool GripperDevice::isHomed() const
+{
+    return homed_;
+}
+
+void GripperDevice::invalidateHoming()
+{
+    homed_ = false;
 }
 
 const std::string& GripperDevice::lastError() const
@@ -44,6 +57,12 @@ const std::string& GripperDevice::lastError() const
 
 bool GripperDevice::moveToPercent(float percent, RealtimeStatus* out)
 {
+    if (!homed_)
+    {
+        last_error_ = "gripper not homed";
+        return false;
+    }
+
     if (config_.fully_open_count == config_.fully_close_count)
     {
         last_error_ = "invalid gripper config: fully_open_count equals fully_close_count";
@@ -160,6 +179,8 @@ bool GripperDevice::homing(const GripperHomingConfig& config,
         last_error_ = "invalid homing config: position_epsilon_count must be >= 0";
         return false;
     }
+
+    homed_ = false;
 
     if (out != nullptr)
     {
@@ -296,6 +317,7 @@ bool GripperDevice::homing(const GripperHomingConfig& config,
                 out->final_status = latest;
             }
 
+            homed_ = true;
             last_error_.clear();
             return true;
         }

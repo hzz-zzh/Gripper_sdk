@@ -64,6 +64,9 @@ public:
     void disconnect();
     bool isConnected() const;
 
+    bool isHomed() const;
+    void invalidateHoming();
+
     const std::string& lastError() const;
 
     bool moveToPercent(float percent, RealtimeStatus* out = nullptr);
@@ -87,6 +90,7 @@ private:
     GripperDeviceConfig config_;
     Gripper motor_;
     std::string last_error_;
+    bool homed_;
 };
 }
 

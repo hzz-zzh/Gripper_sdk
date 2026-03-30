@@ -92,6 +92,8 @@ int gripper_connect(gripper_handle_t* handle);
 void gripper_disconnect(gripper_handle_t* handle);
 int gripper_is_connected(gripper_handle_t* handle);
 
+int gripper_is_homed(gripper_handle_t* handle);
+
 int gripper_open(gripper_handle_t* handle);
 int gripper_close(gripper_handle_t* handle);
 int gripper_move_to_percent(gripper_handle_t* handle, float percent);
