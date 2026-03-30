@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(GRIPPER_SDK VERSION 0.1.0 LANGUAGES C CXX)
 
+include(GNUInstallDirs)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -22,25 +24,11 @@ add_library(gripper_sdk
 
 target_include_directories(gripper_sdk
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/inc
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/inc>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_compile_features(gripper_sdk PUBLIC cxx_std_17)
-
-add_executable(example_main
-    examples/example_main.cpp
-)
-
-target_link_libraries(example_main
-    PRIVATE gripper_sdk
-)
-
-target_include_directories(example_main
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/inc
-)
 
 add_executable(example_c_api
     examples/example_c_api.c
@@ -50,9 +38,27 @@ target_link_libraries(example_c_api
     PRIVATE gripper_sdk
 )
 
-target_include_directories(example_c_api
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/inc
+install(TARGETS gripper_sdk
+    EXPORT GripperSDKTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(FILES
+    inc/c_api/gripper_c_api.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/gripper
+)
+
+install(FILES
+    examples/example_c_api.c
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/gripper_sdk/examples
+)
+
+install(EXPORT GripperSDKTargets
+    FILE GripperSDKTargets.cmake
+    NAMESPACE Gripper::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/GripperSDK
 )
 
 set_target_properties(example_c_api PROPERTIES LINKER_LANGUAGE CXX)
