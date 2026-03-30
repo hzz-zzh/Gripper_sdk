@@ -1,13 +1,12 @@
 #include "core/gripper.h"
 #include "transport/rs485_transport.h"
 
-#include <chrono>
-#include <utility>
 #include <algorithm>
-#include <limits>
-#include <cmath>
-#include <thread>
 #include <chrono>
+#include <cmath>
+#include <limits>
+#include <thread>
+#include <utility>
 
 namespace gripper
 {
@@ -49,28 +48,33 @@ uint32_t convertCurrentLimitAmpToRaw(float current_amp, bool& ok)
     return static_cast<uint32_t>(raw);
 }
 
-bool readExact(ITransport& transport,
-               uint8_t* buffer,
-               std::size_t size,
-               int timeout_ms,
-               std::string& error)
+int remainingMs(const std::chrono::steady_clock::time_point& deadline)
 {
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(timeout_ms);
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline)
+    {
+        return 0;
+    }
 
+    return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+}
+
+bool readExactUntil(ITransport& transport,
+                    uint8_t* buffer,
+                    std::size_t size,
+                    const std::chrono::steady_clock::time_point& deadline,
+                    std::string& error)
+{
     std::size_t received = 0;
 
     while (received < size)
     {
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= deadline)
+        const int remain_ms = remainingMs(deadline);
+        if (remain_ms <= 0)
         {
             error = "read timeout";
             return false;
         }
-
-        const int remain_ms = static_cast<int>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
 
         const int ret = transport.readBytes(buffer + received, size - received, remain_ms);
         if (ret < 0)
@@ -88,7 +92,7 @@ bool readExact(ITransport& transport,
 
     return true;
 }
-}
+} // namespace
 
 Gripper::Gripper(uint8_t device_address)
     : transport_(nullptr),
@@ -99,8 +103,29 @@ Gripper::Gripper(uint8_t device_address)
 {
 }
 
+Gripper::Gripper(uint8_t device_address, std::unique_ptr<ITransport> transport)
+    : transport_(std::move(transport)),
+      device_address_(device_address),
+      next_sequence_(0),
+      timeout_ms_(200),
+      last_error_()
+{
+}
+
 bool Gripper::connect(const std::string& port_name, int baudrate)
 {
+    if (transport_)
+    {
+        if (!transport_->isOpen() && !transport_->open())
+        {
+            last_error_ = "failed to open transport";
+            return false;
+        }
+
+        last_error_.clear();
+        return true;
+    }
+
     transport_ = std::make_unique<Rs485Transport>(port_name, baudrate);
     if (!transport_->open())
     {
@@ -109,6 +134,7 @@ bool Gripper::connect(const std::string& port_name, int baudrate)
         return false;
     }
 
+    last_error_.clear();
     return true;
 }
 
@@ -738,9 +764,6 @@ bool Gripper::startEncoderCalibrationAndWait(int wait_ms,
         {
             return false;
         }
-
-        // 这里先不强行定义“完成条件”，因为协议没单独给校准完成标志
-        // 先以“无故障且能正常读状态”为基本返回条件
     }
 
     return true;
@@ -760,45 +783,37 @@ bool Gripper::transact(protocol::Command cmd,
     const uint8_t seq = next_sequence_++;
     const auto request = protocol::buildRequest(seq, device_address_, cmd, payload);
 
-    const int write_ret = transport_->writeBytes(request.data(), request.size());
-    if (write_ret != static_cast<int>(request.size()))
+    std::size_t written = 0;
+    while (written < request.size())
     {
-        last_error_ = "transport write failed";
-        return false;
+        const int write_ret = transport_->writeBytes(request.data() + written, request.size() - written);
+        if (write_ret <= 0)
+        {
+            last_error_ = "transport write failed";
+            return false;
+        }
+
+        written += static_cast<std::size_t>(write_ret);
     }
 
     if (!expect_response || device_address_ == 0x00)
     {
+        last_error_.clear();
         return true;
     }
 
-    if (!readResponse(response))
+    if (!readResponse(response, seq, cmd))
     {
         return false;
     }
 
-    if (response.header != protocol::kSlaveHeader)
-    {
-        last_error_ = "invalid response header";
-        return false;
-    }
-
-    if (response.sequence != seq)
-    {
-        last_error_ = "response sequence mismatch";
-        return false;
-    }
-
-    if (response.command != static_cast<uint8_t>(cmd))
-    {
-        last_error_ = "response command mismatch";
-        return false;
-    }
-
+    last_error_.clear();
     return true;
 }
 
-bool Gripper::readResponse(protocol::Frame& frame)
+bool Gripper::readResponse(protocol::Frame& frame,
+                           uint8_t expected_sequence,
+                           protocol::Command expected_command)
 {
     if (!transport_)
     {
@@ -806,51 +821,99 @@ bool Gripper::readResponse(protocol::Frame& frame)
         return false;
     }
 
-    std::string error;
-    uint8_t header = 0;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms_);
 
-    do
+    std::string error;
+    std::string last_skipped_reason = "read timeout";
+
+    while (remainingMs(deadline) > 0)
     {
-        if (!readExact(*transport_, &header, 1, timeout_ms_, error))
+        uint8_t header = 0;
+        if (!readExactUntil(*transport_, &header, 1, deadline, error))
         {
             last_error_ = error;
             return false;
         }
-    } while (header != protocol::kSlaveHeader);
 
-    uint8_t fixed_part[4]{};
-    if (!readExact(*transport_, fixed_part, sizeof(fixed_part), timeout_ms_, error))
-    {
-        last_error_ = error;
-        return false;
+        if (header != protocol::kSlaveHeader)
+        {
+            last_skipped_reason = "skipped non-slave header byte";
+            continue;
+        }
+
+        uint8_t fixed_part[4]{};
+        if (!readExactUntil(*transport_, fixed_part, sizeof(fixed_part), deadline, error))
+        {
+            last_error_ = error;
+            return false;
+        }
+
+        const uint8_t payload_len = fixed_part[3];
+        if (payload_len > 248)
+        {
+            last_skipped_reason = "skipped frame with invalid payload length";
+            continue;
+        }
+
+        std::vector<uint8_t> raw;
+        raw.reserve(5 + payload_len + 2);
+        raw.push_back(header);
+        raw.push_back(fixed_part[0]);
+        raw.push_back(fixed_part[1]);
+        raw.push_back(fixed_part[2]);
+        raw.push_back(fixed_part[3]);
+
+        std::vector<uint8_t> tail(static_cast<std::size_t>(payload_len) + 2);
+        if (!readExactUntil(*transport_, tail.data(), tail.size(), deadline, error))
+        {
+            last_error_ = error;
+            return false;
+        }
+
+        raw.insert(raw.end(), tail.begin(), tail.end());
+
+        protocol::Frame candidate;
+        if (!protocol::parseFrame(raw, candidate, &error))
+        {
+            last_skipped_reason = "skipped malformed frame: " + error;
+            continue;
+        }
+
+        if (candidate.sequence != expected_sequence)
+        {
+            last_skipped_reason = "skipped unexpected response sequence";
+            continue;
+        }
+
+        if (candidate.command != static_cast<uint8_t>(expected_command))
+        {
+            last_skipped_reason = "skipped unexpected response command";
+            continue;
+        }
+
+        if (!isExpectedResponseDevice(candidate.device))
+        {
+            last_skipped_reason = "skipped unexpected response device";
+            continue;
+        }
+
+        frame = std::move(candidate);
+        return true;
     }
 
-    const uint8_t payload_len = fixed_part[3];
-    std::vector<uint8_t> raw;
-    raw.reserve(5 + payload_len + 2);
+    last_error_ = last_skipped_reason;
+    return false;
+}
 
-    raw.push_back(header);
-    raw.push_back(fixed_part[0]);
-    raw.push_back(fixed_part[1]);
-    raw.push_back(fixed_part[2]);
-    raw.push_back(fixed_part[3]);
-
-    std::vector<uint8_t> tail(static_cast<std::size_t>(payload_len) + 2);
-    if (!readExact(*transport_, tail.data(), tail.size(), timeout_ms_, error))
+bool Gripper::isExpectedResponseDevice(uint8_t response_device) const
+{
+    if (device_address_ == 0xFF)
     {
-        last_error_ = error;
-        return false;
+        return response_device != 0x00 && response_device != 0xFF;
     }
 
-    raw.insert(raw.end(), tail.begin(), tail.end());
-
-    if (!protocol::parseFrame(raw, frame, &error))
-    {
-        last_error_ = error;
-        return false;
-    }
-
-    return true;
+    return response_device == device_address_;
 }
 
 bool Gripper::parseRealtimePayload(const std::vector<uint8_t>& payload,
@@ -888,4 +951,4 @@ bool Gripper::parseRealtimePayload(const std::vector<uint8_t>& payload,
 
     return true;
 }
-}
+} // namespace gripper

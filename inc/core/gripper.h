@@ -50,6 +50,12 @@ struct RealtimeStatus
     uint8_t fault_code = 0;
 };
 
+struct GripperPositionProfile
+{
+    int32_t open_position_count = -3000;
+    int32_t close_position_count = -53000;
+};
+
 enum class BrakeAction : uint8_t
 {
     Release   = 0x00,
@@ -158,6 +164,7 @@ class Gripper
 {
 public:
     explicit Gripper(uint8_t device_address = 0x01);
+    Gripper(uint8_t device_address, std::unique_ptr<ITransport> transport);
 
     bool connect(const std::string& port_name, int baudrate = 115200);
     void disconnect();
@@ -211,8 +218,8 @@ public:
     bool startEncoderCalibration(RealtimeStatus* out = nullptr);
 
     bool startEncoderCalibrationAndWait(int wait_ms,
-                                    int poll_interval_ms,
-                                    RealtimeStatus& out);
+                                        int poll_interval_ms,
+                                        RealtimeStatus& out);
 
 private:
     bool transact(protocol::Command cmd,
@@ -220,7 +227,11 @@ private:
                   protocol::Frame& response,
                   bool expect_response = true);
 
-    bool readResponse(protocol::Frame& frame);
+    bool readResponse(protocol::Frame& frame,
+                      uint8_t expected_sequence,
+                      protocol::Command expected_command);
+
+    bool isExpectedResponseDevice(uint8_t response_device) const;
 
     static bool parseRealtimePayload(const std::vector<uint8_t>& payload,
                                      RealtimeStatus& out,

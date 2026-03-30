@@ -101,14 +101,14 @@ int main(void)
 
     while(1){
 
-        gripper_move_to_position_with_limits(h,
-                                     -40000,
-                                     200.0f,   // 最大速度 80 rpm
-                                     2.0f);   // 最大电流 1.5 A
+        // gripper_move_to_position_with_limits(h,
+        //                              -40000,
+        //                              200.0f,   // 最大速度 80 rpm
+        //                              2.0f);   // 最大电流 1.5 A
         // gripper_move_to_position(h,-40000);
         // gripper_move_to_percent(h, 80.0f);
         // gripper_close(h);
-        // gripper_open(h);
+        gripper_open(h);
         // gripper_stop(h);
     }
 

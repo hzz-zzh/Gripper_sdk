@@ -3,6 +3,10 @@ cmake_minimum_required(VERSION 3.16)
 project(GRIPPER_SDK VERSION 0.1.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(GRIPPER_SDK_BUILD_EXAMPLES "Build SDK examples" ON)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -22,6 +26,8 @@ add_library(gripper_sdk
     src/transport/rs485_transport.cpp
 )
 
+add_library(Gripper::gripper_sdk ALIAS gripper_sdk)
+
 target_include_directories(gripper_sdk
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/inc>
@@ -30,32 +36,44 @@ target_include_directories(gripper_sdk
 
 target_compile_features(gripper_sdk PUBLIC cxx_std_17)
 
-add_executable(example_c_api
-    examples/example_c_api.c
+set_target_properties(gripper_sdk PROPERTIES
+    OUTPUT_NAME gripper_sdk
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
 )
 
-add_executable(example_homing_c_api
-    examples/example_homing_c_api.c
-)
+if(GRIPPER_SDK_BUILD_EXAMPLES)
+    add_executable(example_c_api
+        examples/example_c_api.c
+    )
 
-target_link_libraries(example_homing_c_api
-    PRIVATE gripper_sdk
-)
+    target_link_libraries(example_c_api
+        PRIVATE Gripper::gripper_sdk
+    )
 
-target_include_directories(example_homing_c_api
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/inc
-)
+    target_include_directories(example_c_api
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
+    )
 
-# 如果你目前 gripper_sdk 还没有把这些依赖正确向外传递，
-# 先临时补上，避免静态链接时报错
-if(UNIX AND NOT APPLE)
-    target_link_libraries(example_homing_c_api PRIVATE stdc++ m)
+    # 让 C 示例用 C++ 链接器，避免静态/共享场景下 C++ 运行时链接问题
+    set_target_properties(example_c_api PROPERTIES LINKER_LANGUAGE CXX)
+
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/example_homing_c_api.c")
+        add_executable(example_homing_c_api
+            examples/example_homing_c_api.c
+        )
+
+        target_link_libraries(example_homing_c_api
+            PRIVATE Gripper::gripper_sdk
+        )
+
+        target_include_directories(example_homing_c_api
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
+        )
+
+        set_target_properties(example_homing_c_api PROPERTIES LINKER_LANGUAGE CXX)
+    endif()
 endif()
-
-target_link_libraries(example_c_api
-    PRIVATE gripper_sdk
-)
 
 install(TARGETS gripper_sdk
     EXPORT GripperSDKTargets
@@ -64,20 +82,49 @@ install(TARGETS gripper_sdk
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
+# 只安装对外 C API 头文件
 install(FILES
     inc/c_api/gripper_c_api.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/gripper
 )
 
-install(FILES
-    examples/example_c_api.c
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/gripper_sdk/examples
-)
+# 安装示例
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/example_c_api.c")
+    install(FILES
+        examples/example_c_api.c
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/gripper_sdk/examples
+    )
+endif()
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/example_homing_c_api.c")
+    install(FILES
+        examples/example_homing_c_api.c
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/gripper_sdk/examples
+    )
+endif()
+
+# 导出 targets
 install(EXPORT GripperSDKTargets
     FILE GripperSDKTargets.cmake
     NAMESPACE Gripper::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/GripperSDK
 )
 
-set_target_properties(example_c_api PROPERTIES LINKER_LANGUAGE CXX)
+# 生成 Config / ConfigVersion
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/GripperSDKConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/GripperSDKConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/GripperSDK
+)
+
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/GripperSDKConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/GripperSDKConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/GripperSDKConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/GripperSDK
+)

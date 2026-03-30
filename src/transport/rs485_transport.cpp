@@ -2,11 +2,11 @@
 
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <sys/ioctl.h>
 
 namespace gripper
 {
@@ -27,7 +27,7 @@ bool baudrateToSpeed(int baudrate, speed_t& speed)
     }
     return true;
 }
-}
+} // namespace
 
 Rs485Transport::Rs485Transport(const std::string& port_name, int baudrate)
     : port_name_(port_name), baudrate_(baudrate), fd_(-1)
@@ -111,14 +111,33 @@ int Rs485Transport::writeBytes(const uint8_t* data, std::size_t size)
         return -1;
     }
 
-    const ssize_t ret = ::write(fd_, data, size);
-    if (ret < 0)
+    std::size_t total_written = 0;
+    while (total_written < size)
+    {
+        const ssize_t ret = ::write(fd_, data + total_written, size - total_written);
+        if (ret < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            return -1;
+        }
+
+        if (ret == 0)
+        {
+            break;
+        }
+
+        total_written += static_cast<std::size_t>(ret);
+    }
+
+    if (::tcdrain(fd_) != 0)
     {
         return -1;
     }
 
-    ::tcdrain(fd_);
-    return static_cast<int>(ret);
+    return static_cast<int>(total_written);
 }
 
 int Rs485Transport::readBytes(uint8_t* data, std::size_t size, int timeout_ms)
@@ -141,7 +160,7 @@ int Rs485Transport::readBytes(uint8_t* data, std::size_t size, int timeout_ms)
     const ssize_t ret = ::read(fd_, data, size);
     if (ret < 0)
     {
-        if (errno == EAGAIN || errno == EWOULDBLOCK)
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
         {
             return 0;
         }
@@ -150,4 +169,4 @@ int Rs485Transport::readBytes(uint8_t* data, std::size_t size, int timeout_ms)
 
     return static_cast<int>(ret);
 }
-}
+} // namespace gripper

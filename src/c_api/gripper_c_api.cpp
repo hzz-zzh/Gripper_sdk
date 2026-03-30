@@ -161,7 +161,7 @@ void gripper_initialize_config_init(gripper_initialize_config_t* config)
         return;
     }
 
-    config->search_speed_rpm = 5.0f;
+    config->search_speed_rpm = 100.0f;
     config->search_direction = +1;
 
     config->poll_interval_ms = 20;
@@ -174,7 +174,7 @@ void gripper_initialize_config_init(gripper_initialize_config_t* config)
 
     config->clear_fault_before_start = 1;
     config->set_zero_after_detect = 1;
-    config->backoff_count_after_zero = 200;
+    config->backoff_count_after_zero = -15000;
 }
 
 int gripper_initialize(gripper_handle_t* handle,

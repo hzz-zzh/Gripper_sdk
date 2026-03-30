@@ -4,6 +4,7 @@
 #include "core/gripper.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace gripper
@@ -14,11 +15,12 @@ struct GripperDeviceConfig
     int baudrate = 115200;
     uint8_t device_address = 0x01;
     int timeout_ms = 200;
+    GripperPositionProfile position_profile{};
 };
 
 struct GripperInitializeConfig
 {
-    float search_speed_rpm = 5.0f;
+    float search_speed_rpm = 100.0f;
     int search_direction = +1;
 
     int poll_interval_ms = 20;
@@ -32,7 +34,7 @@ struct GripperInitializeConfig
     bool clear_fault_before_start = true;
     bool set_zero_after_detect = true;
 
-    int32_t backoff_count_after_zero = 200;
+    int32_t backoff_count_after_zero = -15000;
 };
 
 struct GripperInitializeResult
@@ -52,6 +54,7 @@ class GripperDevice
 {
 public:
     explicit GripperDevice(const GripperDeviceConfig& config = {});
+    GripperDevice(const GripperDeviceConfig& config, std::unique_ptr<ITransport> transport);
 
     bool connect();
     void disconnect();
@@ -79,10 +82,14 @@ public:
     int32_t percentToCount(float percent) const;
     float countToPercent(int32_t count) const;
 
+    const GripperPositionProfile& positionProfile() const;
+    void setPositionProfile(const GripperPositionProfile& profile);
+
     bool readRealtime(RealtimeStatus& out);
     Gripper& motor();
 
 private:
+    bool validatePositionProfile();
     void setLastErrorFromMotor();
 
 private:

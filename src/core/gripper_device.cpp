@@ -4,15 +4,10 @@
 #include <cmath>
 #include <chrono>
 #include <thread>
+#include <utility>
 
 namespace gripper
 {
-namespace
-{
-constexpr int32_t kInternalOpenPositionCount = -53000;
-constexpr int32_t kInternalClosePositionCount = -3000;
-}
-
 GripperDevice::GripperDevice(const GripperDeviceConfig& config)
     : config_(config),
       motor_(config.device_address),
@@ -22,8 +17,23 @@ GripperDevice::GripperDevice(const GripperDeviceConfig& config)
     motor_.setTimeoutMs(config_.timeout_ms);
 }
 
+GripperDevice::GripperDevice(const GripperDeviceConfig& config,
+                             std::unique_ptr<ITransport> transport)
+    : config_(config),
+      motor_(config.device_address, std::move(transport)),
+      last_error_(),
+      initialized_(false)
+{
+    motor_.setTimeoutMs(config_.timeout_ms);
+}
+
 bool GripperDevice::connect()
 {
+    if (!validatePositionProfile())
+    {
+        return false;
+    }
+
     if (!motor_.connect(config_.port_name, config_.baudrate))
     {
         setLastErrorFromMotor();
@@ -317,9 +327,8 @@ bool GripperDevice::moveToPercent(float percent, RealtimeStatus* out)
         return false;
     }
 
-    if (kInternalOpenPositionCount == kInternalClosePositionCount)
+    if (!validatePositionProfile())
     {
-        last_error_ = "invalid internal gripper range";
         return false;
     }
 
@@ -336,12 +345,22 @@ bool GripperDevice::moveToPercent(float percent, RealtimeStatus* out)
 
 bool GripperDevice::open(RealtimeStatus* out)
 {
-    return moveToPosition(kInternalOpenPositionCount, out);
+    if (!validatePositionProfile())
+    {
+        return false;
+    }
+
+    return moveToPosition(config_.position_profile.open_position_count, out);
 }
 
 bool GripperDevice::close(RealtimeStatus* out)
 {
-    return moveToPosition(kInternalClosePositionCount, out);
+    if (!validatePositionProfile())
+    {
+        return false;
+    }
+
+    return moveToPosition(config_.position_profile.close_position_count, out);
 }
 
 int32_t GripperDevice::percentToCount(float percent) const
@@ -350,25 +369,37 @@ int32_t GripperDevice::percentToCount(float percent) const
     const float ratio = clamped / 100.0f;
 
     const float count =
-        static_cast<float>(kInternalClosePositionCount) +
-        ratio * static_cast<float>(kInternalOpenPositionCount - kInternalClosePositionCount);
+        static_cast<float>(config_.position_profile.close_position_count) +
+        ratio * static_cast<float>(config_.position_profile.open_position_count -
+                                   config_.position_profile.close_position_count);
 
     return static_cast<int32_t>(std::lround(count));
 }
 
 float GripperDevice::countToPercent(int32_t count) const
 {
-    const int32_t span = kInternalOpenPositionCount - kInternalClosePositionCount;
+    const int32_t span = config_.position_profile.open_position_count -
+                         config_.position_profile.close_position_count;
     if (span == 0)
     {
         return 0.0f;
     }
 
     const float ratio =
-        static_cast<float>(count - kInternalClosePositionCount) /
+        static_cast<float>(count - config_.position_profile.close_position_count) /
         static_cast<float>(span);
 
     return std::clamp(ratio * 100.0f, 0.0f, 100.0f);
+}
+
+const GripperPositionProfile& GripperDevice::positionProfile() const
+{
+    return config_.position_profile;
+}
+
+void GripperDevice::setPositionProfile(const GripperPositionProfile& profile)
+{
+    config_.position_profile = profile;
 }
 
 bool GripperDevice::stop(RealtimeStatus* out)
@@ -398,6 +429,18 @@ bool GripperDevice::readRealtime(RealtimeStatus& out)
 Gripper& GripperDevice::motor()
 {
     return motor_;
+}
+
+bool GripperDevice::validatePositionProfile()
+{
+    if (config_.position_profile.open_position_count ==
+        config_.position_profile.close_position_count)
+    {
+        last_error_ = "invalid gripper position profile: open and close counts are equal";
+        return false;
+    }
+
+    return true;
 }
 
 void GripperDevice::setLastErrorFromMotor()
