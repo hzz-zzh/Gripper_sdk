@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(GRIPPER_SDK VERSION 0.1.0 LANGUAGES CXX)
+project(GRIPPER_SDK VERSION 0.1.0 LANGUAGES C CXX)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,8 +12,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_library(gripper_sdk
-    src/core/gripper_device.cpp
     src/core/gripper.cpp
+    src/core/gripper_device.cpp
+    src/c_api/gripper_c_api.cpp
     src/protocol/protocol.cpp
     src/protocol/crc.cpp
     src/transport/rs485_transport.cpp
@@ -37,3 +41,18 @@ target_include_directories(example_main
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/inc
 )
+
+add_executable(example_c_api
+    examples/example_c_api.c
+)
+
+target_link_libraries(example_c_api
+    PRIVATE gripper_sdk
+)
+
+target_include_directories(example_c_api
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/inc
+)
+
+set_target_properties(example_c_api PROPERTIES LINKER_LANGUAGE CXX)
