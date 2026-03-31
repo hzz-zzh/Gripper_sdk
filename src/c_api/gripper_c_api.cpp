@@ -18,31 +18,18 @@ struct gripper_handle
 
 namespace
 {
-bool copy_status(const gripper::RealtimeStatus& in, gripper_realtime_status_t* out)
+bool copy_status(const gripper::GripperStatus& in, gripper_status_t* out)
 {
     if (out == nullptr)
     {
         return false;
     }
 
-    out->single_turn_raw = in.single_turn_raw;
-    out->single_turn_deg = in.single_turn_deg;
-
-    out->multi_turn_count = in.multi_turn_count;
-    out->multi_turn_deg = in.multi_turn_deg;
-
-    out->speed_raw = in.speed_raw;
+    out->opening_mm = in.opening_mm;
     out->speed_rpm = in.speed_rpm;
-
-    out->q_current_raw = in.q_current_raw;
     out->q_current_amp = in.q_current_amp;
-
-    out->bus_voltage_raw = in.bus_voltage_raw;
     out->bus_voltage_v = in.bus_voltage_v;
-
-    out->bus_current_raw = in.bus_current_raw;
     out->bus_current_a = in.bus_current_a;
-
     out->temperature_c = in.temperature_c;
     out->run_state = in.run_state;
     out->motor_enabled = in.motor_enabled ? 1 : 0;
@@ -64,7 +51,7 @@ bool copy_initialize_result(const gripper::GripperInitializeResult& in,
     out->backoff_done = in.backoff_done ? 1 : 0;
 
     out->detect_samples = in.detect_samples;
-    out->limit_count_before_zero = in.limit_count_before_zero;
+    out->limit_opening_mm_before_zero = in.limit_opening_mm_before_zero;
     out->mechanical_offset = in.mechanical_offset;
 
     copy_status(in.final_status, &out->final_status);
@@ -86,7 +73,7 @@ void set_error_from_device(gripper_handle* handle)
         handle->last_error = handle->device.lastError();
     }
 }
-}
+} // namespace
 
 extern "C"
 {
@@ -102,6 +89,7 @@ gripper_handle_t* gripper_create(const gripper_config_t* config)
     cpp_config.baudrate = config->baudrate;
     cpp_config.device_address = config->device_address;
     cpp_config.timeout_ms = config->timeout_ms;
+
     try
     {
         return new gripper_handle(cpp_config);
@@ -169,12 +157,12 @@ void gripper_initialize_config_init(gripper_initialize_config_t* config)
 
     config->speed_epsilon_rpm = 0.5f;
     config->current_threshold_a = 0.6f;
-    config->position_epsilon_count = 5;
+    config->position_epsilon_mm = 0.05f;
     config->detect_consecutive_samples = 4;
 
     config->clear_fault_before_start = 1;
     config->set_zero_after_detect = 1;
-    config->backoff_count_after_zero = -15000;
+    config->backoff_after_zero_mm = 2.0f;
 }
 
 int gripper_initialize(gripper_handle_t* handle,
@@ -189,18 +177,15 @@ int gripper_initialize(gripper_handle_t* handle,
     gripper::GripperInitializeConfig cpp_config;
     cpp_config.search_speed_rpm = config->search_speed_rpm;
     cpp_config.search_direction = config->search_direction;
-
     cpp_config.poll_interval_ms = config->poll_interval_ms;
     cpp_config.timeout_ms = config->timeout_ms;
-
     cpp_config.speed_epsilon_rpm = config->speed_epsilon_rpm;
     cpp_config.current_threshold_a = config->current_threshold_a;
-    cpp_config.position_epsilon_count = config->position_epsilon_count;
+    cpp_config.position_epsilon_mm = config->position_epsilon_mm;
     cpp_config.detect_consecutive_samples = config->detect_consecutive_samples;
-
     cpp_config.clear_fault_before_start = (config->clear_fault_before_start != 0);
     cpp_config.set_zero_after_detect = (config->set_zero_after_detect != 0);
-    cpp_config.backoff_count_after_zero = config->backoff_count_after_zero;
+    cpp_config.backoff_after_zero_mm = config->backoff_after_zero_mm;
 
     gripper::GripperInitializeResult cpp_result{};
     if (!handle->device.initialize(cpp_config, &cpp_result))
@@ -228,14 +213,14 @@ int gripper_is_initialized(gripper_handle_t* handle)
     return handle->device.isInitialized() ? 1 : 0;
 }
 
-int gripper_move_to_position(gripper_handle_t* handle, int32_t target_position)
+int gripper_move_to_opening_mm(gripper_handle_t* handle, float opening_mm)
 {
     if (handle == nullptr)
     {
         return GRIPPER_API_INVALID_ARGUMENT;
     }
 
-    if (!handle->device.moveToPosition(target_position))
+    if (!handle->device.moveToOpeningMm(opening_mm))
     {
         set_error_from_device(handle);
         return GRIPPER_API_ERROR;
@@ -245,36 +230,19 @@ int gripper_move_to_position(gripper_handle_t* handle, int32_t target_position)
     return GRIPPER_API_OK;
 }
 
-int gripper_move_to_position_with_limits(gripper_handle_t* handle,
-                                         int32_t target_position,
-                                         float max_speed_rpm,
-                                         float max_current_amp)
+int gripper_move_to_opening_mm_with_limits(gripper_handle_t* handle,
+                                           float opening_mm,
+                                           float max_speed_rpm,
+                                           float max_current_amp)
 {
     if (handle == nullptr)
     {
         return GRIPPER_API_INVALID_ARGUMENT;
     }
 
-    if (!handle->device.moveToPositionWithLimits(target_position,
-                                                 max_speed_rpm,
-                                                 max_current_amp))
-    {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
-    }
-
-    set_error(handle, "");
-    return GRIPPER_API_OK;
-}
-
-int gripper_move_relative(gripper_handle_t* handle, int32_t delta_position)
-{
-    if (handle == nullptr)
-    {
-        return GRIPPER_API_INVALID_ARGUMENT;
-    }
-
-    if (!handle->device.moveRelative(delta_position))
+    if (!handle->device.moveToOpeningMmWithLimits(opening_mm,
+                                                  max_speed_rpm,
+                                                  max_current_amp))
     {
         set_error_from_device(handle);
         return GRIPPER_API_ERROR;
@@ -318,23 +286,6 @@ int gripper_close(gripper_handle_t* handle)
     return GRIPPER_API_OK;
 }
 
-int gripper_move_to_percent(gripper_handle_t* handle, float percent)
-{
-    if (handle == nullptr)
-    {
-        return GRIPPER_API_INVALID_ARGUMENT;
-    }
-
-    if (!handle->device.moveToPercent(percent))
-    {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
-    }
-
-    set_error(handle, "");
-    return GRIPPER_API_OK;
-}
-
 int gripper_stop(gripper_handle_t* handle)
 {
     if (handle == nullptr)
@@ -352,15 +303,15 @@ int gripper_stop(gripper_handle_t* handle)
     return GRIPPER_API_OK;
 }
 
-int gripper_read_realtime(gripper_handle_t* handle, gripper_realtime_status_t* out_status)
+int gripper_read_status(gripper_handle_t* handle, gripper_status_t* out_status)
 {
     if (handle == nullptr || out_status == nullptr)
     {
         return GRIPPER_API_INVALID_ARGUMENT;
     }
 
-    gripper::RealtimeStatus status{};
-    if (!handle->device.readRealtime(status))
+    gripper::GripperStatus status{};
+    if (!handle->device.readStatus(status))
     {
         set_error_from_device(handle);
         return GRIPPER_API_ERROR;
@@ -378,15 +329,34 @@ int gripper_reboot(gripper_handle_t* handle)
         return GRIPPER_API_INVALID_ARGUMENT;
     }
 
-    if (!handle->device.motor().reboot())
+    if (!handle->device.reboot())
     {
-        handle->last_error = handle->device.motor().lastError();
+        set_error_from_device(handle);
         return GRIPPER_API_ERROR;
     }
 
-    handle->device.invalidateInitialization();
     set_error(handle, "");
     return GRIPPER_API_OK;
+}
+
+float gripper_get_min_opening_mm(gripper_handle_t* handle)
+{
+    if (handle == nullptr)
+    {
+        return 0.0f;
+    }
+
+    return handle->device.minOpeningMm();
+}
+
+float gripper_get_max_opening_mm(gripper_handle_t* handle)
+{
+    if (handle == nullptr)
+    {
+        return 0.0f;
+    }
+
+    return handle->device.maxOpeningMm();
 }
 
 const char* gripper_get_last_error(gripper_handle_t* handle)
@@ -398,4 +368,4 @@ const char* gripper_get_last_error(gripper_handle_t* handle)
 
     return handle->last_error.c_str();
 }
-}
+} // extern "C"

@@ -44,20 +44,20 @@ set_target_properties(gripper_sdk PROPERTIES
 
 if(GRIPPER_SDK_BUILD_EXAMPLES)
 
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/example_homing_c_api.c")
-        add_executable(example_homing_c_api
-            examples/example_homing_c_api.c
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/example_c_api.c")
+        add_executable(example_c_api
+            examples/example_c_api.c
         )
 
-        target_link_libraries(example_homing_c_api
+        target_link_libraries(example_c_api
             PRIVATE Gripper::gripper_sdk
         )
 
-        target_include_directories(example_homing_c_api
+        target_include_directories(example_c_api
             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
         )
 
-        set_target_properties(example_homing_c_api PROPERTIES LINKER_LANGUAGE CXX)
+        set_target_properties(example_c_api PROPERTIES LINKER_LANGUAGE CXX)
     endif()
 endif()
 
@@ -74,9 +74,9 @@ install(FILES
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/gripper
 )
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/example_homing_c_api.c")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/example_c_api.c")
     install(FILES
-        examples/example_homing_c_api.c
+        examples/example_c_api.c
         DESTINATION ${CMAKE_INSTALL_DATADIR}/gripper_sdk/examples
     )
 endif()

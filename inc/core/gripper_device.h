@@ -15,7 +15,19 @@ struct GripperDeviceConfig
     int baudrate = 115200;
     uint8_t device_address = 0x01;
     int timeout_ms = 200;
-    GripperPositionProfile position_profile{};
+};
+
+struct GripperStatus
+{
+    float opening_mm = 0.0f;
+    float speed_rpm = 0.0f;
+    float q_current_amp = 0.0f;
+    float bus_voltage_v = 0.0f;
+    float bus_current_a = 0.0f;
+    uint8_t temperature_c = 0;
+    uint8_t run_state = 0;
+    bool motor_enabled = false;
+    uint8_t fault_code = 0;
 };
 
 struct GripperInitializeConfig
@@ -28,13 +40,13 @@ struct GripperInitializeConfig
 
     float speed_epsilon_rpm = 0.5f;
     float current_threshold_a = 0.6f;
-    int32_t position_epsilon_count = 5;
+    float position_epsilon_mm = 0.05f;
     int detect_consecutive_samples = 4;
 
     bool clear_fault_before_start = true;
     bool set_zero_after_detect = true;
 
-    int32_t backoff_count_after_zero = -15000;
+    float backoff_after_zero_mm = 2.0f;
 };
 
 struct GripperInitializeResult
@@ -44,10 +56,10 @@ struct GripperInitializeResult
     bool backoff_done = false;
 
     int detect_samples = 0;
-    int32_t limit_count_before_zero = 0;
+    float limit_opening_mm_before_zero = 0.0f;
     uint16_t mechanical_offset = 0;
 
-    RealtimeStatus final_status{};
+    GripperStatus final_status{};
 };
 
 class GripperDevice
@@ -67,29 +79,30 @@ public:
 
     const std::string& lastError() const;
 
-    bool moveToPosition(int32_t target_position, RealtimeStatus* out = nullptr);
-    bool moveToPositionWithLimits(int32_t target_position,
-                                  float max_speed_rpm = 0.0f,
-                                  float max_current_amp = 0.0f,
-                                  RealtimeStatus* out = nullptr);
-    bool moveRelative(int32_t delta_position, RealtimeStatus* out = nullptr);
+    bool moveToOpeningMm(float target_opening_mm, GripperStatus* out = nullptr);
+    bool moveToOpeningMmWithLimits(float target_opening_mm,
+                                   float max_speed_rpm = 0.0f,
+                                   float max_current_amp = 0.0f,
+                                   GripperStatus* out = nullptr);
 
-    bool moveToPercent(float percent, RealtimeStatus* out = nullptr);
-    bool open(RealtimeStatus* out = nullptr);
-    bool close(RealtimeStatus* out = nullptr);
-    bool stop(RealtimeStatus* out = nullptr);
+    bool open(GripperStatus* out = nullptr);
+    bool close(GripperStatus* out = nullptr);
+    bool stop(GripperStatus* out = nullptr);
 
-    int32_t percentToCount(float percent) const;
-    float countToPercent(int32_t count) const;
+    bool readStatus(GripperStatus& out);
+    bool reboot();
 
-    const GripperPositionProfile& positionProfile() const;
-    void setPositionProfile(const GripperPositionProfile& profile);
-
-    bool readRealtime(RealtimeStatus& out);
-    Gripper& motor();
+    float minOpeningMm() const;
+    float maxOpeningMm() const;
 
 private:
-    bool validatePositionProfile();
+    double countToTurbineAngleDeg(int32_t count) const;
+    double turbineAngleDegToOpeningMm(double alpha_deg) const;
+    float countToOpeningMm(int32_t count) const;
+
+    bool openingMmToCount(float opening_mm, int32_t& out_count);
+    int32_t openingMmToBackoffDeltaCount(float delta_mm, int32_t reference_count) const;
+    bool convertRealtimeToStatus(const RealtimeStatus& in, GripperStatus& out) const;
     void setLastErrorFromMotor();
 
 private:

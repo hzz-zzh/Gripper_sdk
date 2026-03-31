@@ -1,6 +1,21 @@
 #include "c_api/gripper_c_api.h"
 #include <stdio.h>
 
+static void print_status(const gripper_status_t* st)
+{
+    if (st == NULL)
+    {
+        return;
+    }
+
+    printf("opening=%.3f mm, speed=%.3f rpm, q_current=%.3f A, voltage=%.3f V, fault=0x%02X\n",
+           st->opening_mm,
+           st->speed_rpm,
+           st->q_current_amp,
+           st->bus_voltage_v,
+           st->fault_code);
+}
+
 int main(void)
 {
     gripper_config_t cfg;
@@ -23,32 +38,67 @@ int main(void)
         return 1;
     }
 
-    if (gripper_open(h) != GRIPPER_API_OK)
-    {
-        printf("open failed: %s\n", gripper_get_last_error(h));
-        gripper_destroy(h);
-        return 1;
-    }
+    printf("connect ok\n");
+    printf("opening range: [%.3f, %.3f] mm\n",
+           gripper_get_min_opening_mm(h),
+           gripper_get_max_opening_mm(h));
 
-    if (gripper_move_to_percent(h, 50.0f) != GRIPPER_API_OK)
+    gripper_status_t before;
+    if (gripper_read_status(h, &before) == GRIPPER_API_OK)
     {
-        printf("move_to_percent failed: %s\n", gripper_get_last_error(h));
-        gripper_destroy(h);
-        return 1;
-    }
-
-    gripper_realtime_status_t st;
-    if (gripper_read_realtime(h, &st) == GRIPPER_API_OK)
-    {
-        printf("count=%d, speed=%.3f rpm, voltage=%.3f V, fault=0x%02X\n",
-               st.multi_turn_count,
-               st.speed_rpm,
-               st.bus_voltage_v,
-               st.fault_code);
+        printf("before homing:\n");
+        print_status(&before);
     }
     else
     {
-        printf("read_realtime failed: %s\n", gripper_get_last_error(h));
+        printf("read_status before homing failed: %s\n", gripper_get_last_error(h));
+    }
+
+    gripper_initialize_config_t hc;
+    gripper_initialize_result_t hr;
+
+    gripper_initialize_config_init(&hc);
+
+    hc.search_speed_rpm = 100.0f;
+    hc.search_direction = +1;
+    hc.poll_interval_ms = 20;
+    hc.timeout_ms = 5000;
+    hc.speed_epsilon_rpm = 0.5f;
+    hc.current_threshold_a = 0.5f;
+    hc.position_epsilon_mm = 0.05f;
+    hc.detect_consecutive_samples = 4;
+    hc.clear_fault_before_start = 1;
+    hc.set_zero_after_detect = 1;
+    hc.backoff_after_zero_mm = 2.0f;
+
+    printf("start homing...\n");
+    if (gripper_initialize(h, &hc, &hr) != GRIPPER_API_OK)
+    {
+        printf("homing failed: %s\n", gripper_get_last_error(h));
+        gripper_disconnect(h);
+        gripper_destroy(h);
+        return 1;
+    }
+
+    printf("homing ok, limit opening before zero = %.3f mm\n",
+           hr.limit_opening_mm_before_zero);
+
+    if (gripper_move_to_opening_mm_with_limits(h,
+                                               40.0f,
+                                               200.0f,
+                                               2.0f) != GRIPPER_API_OK)
+    {
+        printf("move_to_opening_mm_with_limits failed: %s\n",
+               gripper_get_last_error(h));
+    }
+    else
+    {
+        gripper_status_t after_move;
+        if (gripper_read_status(h, &after_move) == GRIPPER_API_OK)
+        {
+            printf("after move:\n");
+            print_status(&after_move);
+        }
     }
 
     gripper_stop(h);

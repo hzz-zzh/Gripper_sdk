@@ -19,29 +19,16 @@ typedef struct
 
 typedef struct
 {
-    uint16_t single_turn_raw;
-    float single_turn_deg;
-
-    int32_t multi_turn_count;
-    float multi_turn_deg;
-
-    int32_t speed_raw;
+    float opening_mm;
     float speed_rpm;
-
-    int32_t q_current_raw;
     float q_current_amp;
-
-    uint16_t bus_voltage_raw;
     float bus_voltage_v;
-
-    uint16_t bus_current_raw;
     float bus_current_a;
-
     uint8_t temperature_c;
     uint8_t run_state;
     int motor_enabled;
     uint8_t fault_code;
-} gripper_realtime_status_t;
+} gripper_status_t;
 
 typedef struct
 {
@@ -53,12 +40,12 @@ typedef struct
 
     float speed_epsilon_rpm;
     float current_threshold_a;
-    int32_t position_epsilon_count;
+    float position_epsilon_mm;
     int detect_consecutive_samples;
 
     int clear_fault_before_start;
     int set_zero_after_detect;
-    int32_t backoff_count_after_zero;
+    float backoff_after_zero_mm;
 } gripper_initialize_config_t;
 
 typedef struct
@@ -68,10 +55,10 @@ typedef struct
     int backoff_done;
 
     int detect_samples;
-    int32_t limit_count_before_zero;
+    float limit_opening_mm_before_zero;
     uint16_t mechanical_offset;
 
-    gripper_realtime_status_t final_status;
+    gripper_status_t final_status;
 } gripper_initialize_result_t;
 
 enum
@@ -94,21 +81,21 @@ int gripper_initialize(gripper_handle_t* handle,
                        gripper_initialize_result_t* out_result);
 int gripper_is_initialized(gripper_handle_t* handle);
 
-int gripper_move_to_position(gripper_handle_t* handle, int32_t target_position);
-int gripper_move_to_position_with_limits(gripper_handle_t* handle,
-                                         int32_t target_position,
-                                         float max_speed_rpm,
-                                         float max_current_amp);
-// int gripper_move_relative(gripper_handle_t* handle, int32_t delta_position);
+int gripper_move_to_opening_mm(gripper_handle_t* handle, float opening_mm);
+int gripper_move_to_opening_mm_with_limits(gripper_handle_t* handle,
+                                           float opening_mm,
+                                           float max_speed_rpm,
+                                           float max_current_amp);
 
 int gripper_open(gripper_handle_t* handle);
 int gripper_close(gripper_handle_t* handle);
-int gripper_move_to_percent(gripper_handle_t* handle, float percent);
 int gripper_stop(gripper_handle_t* handle);
 
-int gripper_read_realtime(gripper_handle_t* handle, gripper_realtime_status_t* out_status);
-
+int gripper_read_status(gripper_handle_t* handle, gripper_status_t* out_status);
 int gripper_reboot(gripper_handle_t* handle);
+
+float gripper_get_min_opening_mm(gripper_handle_t* handle);
+float gripper_get_max_opening_mm(gripper_handle_t* handle);
 
 const char* gripper_get_last_error(gripper_handle_t* handle);
 

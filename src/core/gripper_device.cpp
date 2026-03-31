@@ -1,13 +1,44 @@
 #include "core/gripper_device.h"
 
 #include <algorithm>
-#include <cmath>
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace gripper
 {
+namespace
+{
+constexpr double kEncoderCountPerRev = 16384.0;
+constexpr double kReducerRatio = 24.0;
+constexpr double kTotalCountPerTurbineRev = kEncoderCountPerRev * kReducerRatio;
+
+constexpr double kLinkLengthMm = 60.0;
+constexpr double kAlphaBreakDeg = 27.4275788;
+constexpr double kAlphaOffsetDeg = 10.56397759;
+
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kDegPerCount = 360.0 / kTotalCountPerTurbineRev;
+
+constexpr double degToRad(double deg)
+{
+    return deg * kPi / 180.0;
+}
+
+constexpr double radToDeg(double rad)
+{
+    return rad * 180.0 / kPi;
+}
+
+constexpr double clampUnit(double x)
+{
+    return (x < -1.0) ? -1.0 : ((x > 1.0) ? 1.0 : x);
+}
+} // namespace
+
 GripperDevice::GripperDevice(const GripperDeviceConfig& config)
     : config_(config),
       motor_(config.device_address),
@@ -29,11 +60,6 @@ GripperDevice::GripperDevice(const GripperDeviceConfig& config,
 
 bool GripperDevice::connect()
 {
-    if (!validatePositionProfile())
-    {
-        return false;
-    }
-
     if (!motor_.connect(config_.port_name, config_.baudrate))
     {
         setLastErrorFromMotor();
@@ -104,9 +130,15 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         return false;
     }
 
-    if (config.position_epsilon_count < 0)
+    if (config.position_epsilon_mm < 0.0f)
     {
-        last_error_ = "invalid initialize config: position_epsilon_count must be >= 0";
+        last_error_ = "invalid initialize config: position_epsilon_mm must be >= 0";
+        return false;
+    }
+
+    if (config.backoff_after_zero_mm < 0.0f)
+    {
+        last_error_ = "invalid initialize config: backoff_after_zero_mm must be >= 0";
         return false;
     }
 
@@ -139,8 +171,8 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(config.timeout_ms);
 
-    bool has_prev_count = false;
-    int32_t prev_count = 0;
+    bool has_prev_status = false;
+    RealtimeStatus prev_status{};
     int consecutive_hits = 0;
     RealtimeStatus latest{};
 
@@ -162,23 +194,18 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
             return false;
         }
 
-        int32_t delta_count = 0;
-        if (has_prev_count)
+        float delta_opening_mm = std::numeric_limits<float>::max();
+        if (has_prev_status)
         {
-            delta_count = std::abs(latest.multi_turn_count - prev_count);
+            const float prev_opening_mm = countToOpeningMm(prev_status.multi_turn_count);
+            const float latest_opening_mm = countToOpeningMm(latest.multi_turn_count);
+            delta_opening_mm = std::abs(latest_opening_mm - prev_opening_mm);
         }
 
-        prev_count = latest.multi_turn_count;
-        has_prev_count = true;
-
-        const bool speed_small =
-            std::abs(latest.speed_rpm) <= config.speed_epsilon_rpm;
-
-        const bool current_high =
-            std::abs(latest.q_current_amp) >= config.current_threshold_a;
-
-        const bool position_locked =
-            has_prev_count && (delta_count <= config.position_epsilon_count);
+        const bool speed_small = std::abs(latest.speed_rpm) <= config.speed_epsilon_rpm;
+        const bool current_high = std::abs(latest.q_current_amp) >= config.current_threshold_a;
+        const bool position_locked = has_prev_status &&
+                                     (delta_opening_mm <= config.position_epsilon_mm);
 
         if (speed_small && current_high && position_locked)
         {
@@ -188,6 +215,9 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         {
             consecutive_hits = 0;
         }
+
+        prev_status = latest;
+        has_prev_status = true;
 
         if (consecutive_hits >= config.detect_consecutive_samples)
         {
@@ -201,7 +231,7 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
             {
                 out->limit_detected = true;
                 out->detect_samples = consecutive_hits;
-                out->limit_count_before_zero = latest.multi_turn_count;
+                out->limit_opening_mm_before_zero = countToOpeningMm(latest.multi_turn_count);
             }
 
             uint16_t mechanical_offset = 0;
@@ -220,10 +250,11 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
                 }
             }
 
-            if (config.backoff_count_after_zero > 0)
+            if (config.backoff_after_zero_mm > 0.0f)
             {
-                const int32_t backoff_delta =
-                    -config.search_direction * config.backoff_count_after_zero;
+                const int32_t backoff_count_mag =
+                    openingMmToBackoffDeltaCount(config.backoff_after_zero_mm, 0);
+                const int32_t backoff_delta = -config.search_direction * backoff_count_mag;
 
                 if (!motor_.moveByCount(backoff_delta, &latest))
                 {
@@ -245,7 +276,7 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
 
             if (out != nullptr)
             {
-                out->final_status = latest;
+                convertRealtimeToStatus(latest, out->final_status);
             }
 
             initialized_ = true;
@@ -259,7 +290,7 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
     return false;
 }
 
-bool GripperDevice::moveToPosition(int32_t target_position, RealtimeStatus* out)
+bool GripperDevice::moveToOpeningMm(float target_opening_mm, GripperStatus* out)
 {
     if (!initialized_)
     {
@@ -267,20 +298,32 @@ bool GripperDevice::moveToPosition(int32_t target_position, RealtimeStatus* out)
         return false;
     }
 
-    if (!motor_.moveToCount(target_position, out))
+    int32_t target_count = 0;
+    if (!openingMmToCount(target_opening_mm, target_count))
+    {
+        return false;
+    }
+
+    RealtimeStatus realtime{};
+    if (!motor_.moveToCount(target_count, out ? &realtime : nullptr))
     {
         setLastErrorFromMotor();
         return false;
+    }
+
+    if (out != nullptr)
+    {
+        convertRealtimeToStatus(realtime, *out);
     }
 
     last_error_.clear();
     return true;
 }
 
-bool GripperDevice::moveToPositionWithLimits(int32_t target_position,
-                                             float max_speed_rpm,
-                                             float max_current_amp,
-                                             RealtimeStatus* out)
+bool GripperDevice::moveToOpeningMmWithLimits(float target_opening_mm,
+                                              float max_speed_rpm,
+                                              float max_current_amp,
+                                              GripperStatus* out)
 {
     if (!initialized_)
     {
@@ -288,158 +331,224 @@ bool GripperDevice::moveToPositionWithLimits(int32_t target_position,
         return false;
     }
 
-    if (!motor_.moveToCountWithLimits(target_position,
+    int32_t target_count = 0;
+    if (!openingMmToCount(target_opening_mm, target_count))
+    {
+        return false;
+    }
+
+    RealtimeStatus realtime{};
+    if (!motor_.moveToCountWithLimits(target_count,
                                       max_speed_rpm,
                                       max_current_amp,
-                                      out))
+                                      out ? &realtime : nullptr))
     {
         setLastErrorFromMotor();
         return false;
+    }
+
+    if (out != nullptr)
+    {
+        convertRealtimeToStatus(realtime, *out);
     }
 
     last_error_.clear();
     return true;
 }
 
-bool GripperDevice::moveRelative(int32_t delta_position, RealtimeStatus* out)
+bool GripperDevice::open(GripperStatus* out)
 {
-    if (!initialized_)
-    {
-        last_error_ = "gripper not initialized";
-        return false;
-    }
+    return moveToOpeningMm(maxOpeningMm(), out);
+}
 
-    if (!motor_.moveByCount(delta_position, out))
+bool GripperDevice::close(GripperStatus* out)
+{
+    return moveToOpeningMm(minOpeningMm(), out);
+}
+
+bool GripperDevice::stop(GripperStatus* out)
+{
+    RealtimeStatus realtime{};
+    if (!motor_.motorOff(out ? &realtime : nullptr))
     {
         setLastErrorFromMotor();
         return false;
+    }
+
+    if (out != nullptr)
+    {
+        convertRealtimeToStatus(realtime, *out);
     }
 
     last_error_.clear();
     return true;
 }
 
-bool GripperDevice::moveToPercent(float percent, RealtimeStatus* out)
+bool GripperDevice::readStatus(GripperStatus& out)
 {
-    if (!initialized_)
-    {
-        last_error_ = "gripper not initialized";
-        return false;
-    }
-
-    if (!validatePositionProfile())
-    {
-        return false;
-    }
-
-    const int32_t target_count = percentToCount(percent);
-    if (!motor_.moveToCount(target_count, out))
+    RealtimeStatus realtime{};
+    if (!motor_.readRealtime(realtime))
     {
         setLastErrorFromMotor();
         return false;
     }
 
+    convertRealtimeToStatus(realtime, out);
     last_error_.clear();
     return true;
 }
 
-bool GripperDevice::open(RealtimeStatus* out)
+bool GripperDevice::reboot()
 {
-    if (!validatePositionProfile())
-    {
-        return false;
-    }
-
-    return moveToPosition(config_.position_profile.open_position_count, out);
-}
-
-bool GripperDevice::close(RealtimeStatus* out)
-{
-    if (!validatePositionProfile())
-    {
-        return false;
-    }
-
-    return moveToPosition(config_.position_profile.close_position_count, out);
-}
-
-int32_t GripperDevice::percentToCount(float percent) const
-{
-    const float clamped = std::clamp(percent, 0.0f, 100.0f);
-    const float ratio = clamped / 100.0f;
-
-    const float count =
-        static_cast<float>(config_.position_profile.close_position_count) +
-        ratio * static_cast<float>(config_.position_profile.open_position_count -
-                                   config_.position_profile.close_position_count);
-
-    return static_cast<int32_t>(std::lround(count));
-}
-
-float GripperDevice::countToPercent(int32_t count) const
-{
-    const int32_t span = config_.position_profile.open_position_count -
-                         config_.position_profile.close_position_count;
-    if (span == 0)
-    {
-        return 0.0f;
-    }
-
-    const float ratio =
-        static_cast<float>(count - config_.position_profile.close_position_count) /
-        static_cast<float>(span);
-
-    return std::clamp(ratio * 100.0f, 0.0f, 100.0f);
-}
-
-const GripperPositionProfile& GripperDevice::positionProfile() const
-{
-    return config_.position_profile;
-}
-
-void GripperDevice::setPositionProfile(const GripperPositionProfile& profile)
-{
-    config_.position_profile = profile;
-}
-
-bool GripperDevice::stop(RealtimeStatus* out)
-{
-    if (!motor_.motorOff(out))
+    if (!motor_.reboot())
     {
         setLastErrorFromMotor();
         return false;
     }
 
+    initialized_ = false;
     last_error_.clear();
     return true;
 }
 
-bool GripperDevice::readRealtime(RealtimeStatus& out)
+float GripperDevice::minOpeningMm() const
 {
-    if (!motor_.readRealtime(out))
+    return static_cast<float>(2.0 * kLinkLengthMm * std::sin(degToRad(kAlphaOffsetDeg)));
+}
+
+float GripperDevice::maxOpeningMm() const
+{
+    return static_cast<float>(2.0 * kLinkLengthMm *
+                              (std::sin(degToRad(kAlphaBreakDeg)) +
+                               std::sin(degToRad(kAlphaOffsetDeg))));
+}
+
+double GripperDevice::countToTurbineAngleDeg(int32_t count) const
+{
+    return static_cast<double>(count) * kDegPerCount;
+}
+
+double GripperDevice::turbineAngleDegToOpeningMm(double alpha_deg) const
+{
+    if (alpha_deg <= kAlphaBreakDeg)
     {
-        setLastErrorFromMotor();
+        return 2.0 * kLinkLengthMm *
+               (std::sin(degToRad(kAlphaBreakDeg - alpha_deg)) +
+                std::sin(degToRad(kAlphaOffsetDeg)));
+    }
+
+    return 2.0 * kLinkLengthMm *
+           (std::sin(degToRad(kAlphaBreakDeg)) +
+            std::sin(degToRad(alpha_deg - kAlphaBreakDeg)));
+}
+
+float GripperDevice::countToOpeningMm(int32_t count) const
+{
+    return static_cast<float>(turbineAngleDegToOpeningMm(countToTurbineAngleDeg(count)));
+}
+
+bool GripperDevice::openingMmToCount(float opening_mm, int32_t& out_count)
+{
+    std::vector<int32_t> candidates;
+
+    const double normalized_branch1 =
+        static_cast<double>(opening_mm) / (2.0 * kLinkLengthMm) - std::sin(degToRad(kAlphaOffsetDeg));
+    if (normalized_branch1 >= -1.0 && normalized_branch1 <= 1.0)
+    {
+        const double alpha_deg =
+            kAlphaBreakDeg - radToDeg(std::asin(clampUnit(normalized_branch1)));
+        if (alpha_deg <= kAlphaBreakDeg + 1e-6)
+        {
+            candidates.push_back(static_cast<int32_t>(std::lround(alpha_deg / kDegPerCount)));
+        }
+    }
+
+    const double normalized_branch2 =
+        static_cast<double>(opening_mm) / (2.0 * kLinkLengthMm) - std::sin(degToRad(kAlphaBreakDeg));
+    if (normalized_branch2 >= -1.0 && normalized_branch2 <= 1.0)
+    {
+        const double alpha_deg =
+            kAlphaBreakDeg + radToDeg(std::asin(clampUnit(normalized_branch2)));
+        if (alpha_deg > kAlphaBreakDeg - 1e-6)
+        {
+            const int32_t count_candidate =
+                static_cast<int32_t>(std::lround(alpha_deg / kDegPerCount));
+
+            bool duplicated = false;
+            for (const int32_t existing : candidates)
+            {
+                if (std::abs(existing - count_candidate) <= 1)
+                {
+                    duplicated = true;
+                    break;
+                }
+            }
+
+            if (!duplicated)
+            {
+                candidates.push_back(count_candidate);
+            }
+        }
+    }
+
+    if (candidates.empty())
+    {
+        last_error_ = "target opening_mm is outside the valid geometry range";
         return false;
     }
 
+    int32_t current_count = 0;
+    RealtimeStatus current{};
+    if (motor_.isConnected() && motor_.readRealtime(current))
+    {
+        current_count = current.multi_turn_count;
+    }
+
+    auto best_it = candidates.begin();
+    int64_t best_distance = std::llabs(static_cast<long long>(*best_it) -
+                                       static_cast<long long>(current_count));
+
+    for (auto it = std::next(candidates.begin()); it != candidates.end(); ++it)
+    {
+        const int64_t distance = std::llabs(static_cast<long long>(*it) -
+                                            static_cast<long long>(current_count));
+        if (distance < best_distance)
+        {
+            best_distance = distance;
+            best_it = it;
+        }
+    }
+
+    out_count = *best_it;
     last_error_.clear();
     return true;
 }
 
-Gripper& GripperDevice::motor()
+int32_t GripperDevice::openingMmToBackoffDeltaCount(float delta_mm, int32_t reference_count) const
 {
-    return motor_;
-}
-
-bool GripperDevice::validatePositionProfile()
-{
-    if (config_.position_profile.open_position_count ==
-        config_.position_profile.close_position_count)
+    if (!(delta_mm > 0.0f))
     {
-        last_error_ = "invalid gripper position profile: open and close counts are equal";
-        return false;
+        return 0;
     }
 
+    const float opening_here = countToOpeningMm(reference_count);
+    const float opening_next = countToOpeningMm(reference_count + 1);
+    const float mm_per_count = std::max(std::abs(opening_next - opening_here), 1e-6f);
+
+    return static_cast<int32_t>(std::ceil(delta_mm / mm_per_count));
+}
+
+bool GripperDevice::convertRealtimeToStatus(const RealtimeStatus& in, GripperStatus& out) const
+{
+    out.opening_mm = countToOpeningMm(in.multi_turn_count);
+    out.speed_rpm = in.speed_rpm;
+    out.q_current_amp = in.q_current_amp;
+    out.bus_voltage_v = in.bus_voltage_v;
+    out.bus_current_a = in.bus_current_a;
+    out.temperature_c = in.temperature_c;
+    out.run_state = in.run_state;
+    out.motor_enabled = in.motor_enabled;
+    out.fault_code = in.fault_code;
     return true;
 }
 
@@ -447,4 +556,4 @@ void GripperDevice::setLastErrorFromMotor()
 {
     last_error_ = motor_.lastError();
 }
-}
+} // namespace gripper
