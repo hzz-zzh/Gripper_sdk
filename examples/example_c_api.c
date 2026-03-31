@@ -84,7 +84,7 @@ int main(void)
            hr.limit_opening_mm_before_zero);
 
     if (gripper_move_to_opening_mm_with_limits(h,
-                                               40.0f,
+                                               30.0f,
                                                200.0f,
                                                2.0f) != GRIPPER_API_OK)
     {

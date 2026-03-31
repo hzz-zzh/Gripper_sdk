@@ -6,7 +6,6 @@
 #include <limits>
 #include <thread>
 #include <utility>
-#include <vector>
 
 namespace gripper
 {
@@ -22,20 +21,37 @@ constexpr double kAlphaOffsetDeg = 10.56397759;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kDegPerCount = 360.0 / kTotalCountPerTurbineRev;
+constexpr double kAlphaMinDeg = 0.0;
+constexpr double kAlphaMaxDeg = kAlphaBreakDeg + kAlphaOffsetDeg;
 
-constexpr double degToRad(double deg)
+inline double degToRad(double deg)
 {
     return deg * kPi / 180.0;
 }
 
-constexpr double radToDeg(double rad)
+inline double radToDeg(double rad)
 {
     return rad * 180.0 / kPi;
 }
 
-constexpr double clampUnit(double x)
+inline double clampUnit(double x)
 {
-    return (x < -1.0) ? -1.0 : ((x > 1.0) ? 1.0 : x);
+    if (x < -1.0)
+    {
+        return -1.0;
+    }
+    if (x > 1.0)
+    {
+        return 1.0;
+    }
+    return x;
+}
+
+inline double maxOpeningFromFormula()
+{
+    return 2.0 * kLinkLengthMm *
+           (std::sin(degToRad(kAlphaBreakDeg)) +
+            std::sin(degToRad(kAlphaOffsetDeg)));
 }
 } // namespace
 
@@ -413,113 +429,57 @@ bool GripperDevice::reboot()
 
 float GripperDevice::minOpeningMm() const
 {
-    return static_cast<float>(2.0 * kLinkLengthMm * std::sin(degToRad(kAlphaOffsetDeg)));
+    return 0.0f;
 }
 
 float GripperDevice::maxOpeningMm() const
 {
-    return static_cast<float>(2.0 * kLinkLengthMm *
-                              (std::sin(degToRad(kAlphaBreakDeg)) +
-                               std::sin(degToRad(kAlphaOffsetDeg))));
+    return static_cast<float>(maxOpeningFromFormula());
 }
 
 double GripperDevice::countToTurbineAngleDeg(int32_t count) const
 {
-    return static_cast<double>(count) * kDegPerCount;
+    return -static_cast<double>(count) * kDegPerCount;
 }
 
 double GripperDevice::turbineAngleDegToOpeningMm(double alpha_deg) const
 {
-    if (alpha_deg <= kAlphaBreakDeg)
-    {
-        return 2.0 * kLinkLengthMm *
-               (std::sin(degToRad(kAlphaBreakDeg - alpha_deg)) +
-                std::sin(degToRad(kAlphaOffsetDeg)));
-    }
+    const double alpha = std::clamp(alpha_deg, kAlphaMinDeg, kAlphaMaxDeg);
 
     return 2.0 * kLinkLengthMm *
-           (std::sin(degToRad(kAlphaBreakDeg)) +
-            std::sin(degToRad(alpha_deg - kAlphaBreakDeg)));
+           (std::sin(degToRad(kAlphaBreakDeg - alpha)) +
+            std::sin(degToRad(kAlphaOffsetDeg)));
 }
 
 float GripperDevice::countToOpeningMm(int32_t count) const
 {
-    return static_cast<float>(turbineAngleDegToOpeningMm(countToTurbineAngleDeg(count)));
+    const double opening = turbineAngleDegToOpeningMm(countToTurbineAngleDeg(count));
+    return static_cast<float>(std::clamp(opening,
+                                         static_cast<double>(minOpeningMm()),
+                                         static_cast<double>(maxOpeningMm())));
 }
 
 bool GripperDevice::openingMmToCount(float opening_mm, int32_t& out_count)
 {
-    std::vector<int32_t> candidates;
+    const double min_mm = static_cast<double>(minOpeningMm());
+    const double max_mm = static_cast<double>(maxOpeningMm());
+    const double target_mm = static_cast<double>(opening_mm);
 
-    const double normalized_branch1 =
-        static_cast<double>(opening_mm) / (2.0 * kLinkLengthMm) - std::sin(degToRad(kAlphaOffsetDeg));
-    if (normalized_branch1 >= -1.0 && normalized_branch1 <= 1.0)
-    {
-        const double alpha_deg =
-            kAlphaBreakDeg - radToDeg(std::asin(clampUnit(normalized_branch1)));
-        if (alpha_deg <= kAlphaBreakDeg + 1e-6)
-        {
-            candidates.push_back(static_cast<int32_t>(std::lround(alpha_deg / kDegPerCount)));
-        }
-    }
-
-    const double normalized_branch2 =
-        static_cast<double>(opening_mm) / (2.0 * kLinkLengthMm) - std::sin(degToRad(kAlphaBreakDeg));
-    if (normalized_branch2 >= -1.0 && normalized_branch2 <= 1.0)
-    {
-        const double alpha_deg =
-            kAlphaBreakDeg + radToDeg(std::asin(clampUnit(normalized_branch2)));
-        if (alpha_deg > kAlphaBreakDeg - 1e-6)
-        {
-            const int32_t count_candidate =
-                static_cast<int32_t>(std::lround(alpha_deg / kDegPerCount));
-
-            bool duplicated = false;
-            for (const int32_t existing : candidates)
-            {
-                if (std::abs(existing - count_candidate) <= 1)
-                {
-                    duplicated = true;
-                    break;
-                }
-            }
-
-            if (!duplicated)
-            {
-                candidates.push_back(count_candidate);
-            }
-        }
-    }
-
-    if (candidates.empty())
+    if (target_mm < min_mm - 1e-6 || target_mm > max_mm + 1e-6)
     {
         last_error_ = "target opening_mm is outside the valid geometry range";
         return false;
     }
 
-    int32_t current_count = 0;
-    RealtimeStatus current{};
-    if (motor_.isConnected() && motor_.readRealtime(current))
-    {
-        current_count = current.multi_turn_count;
-    }
+    const double s = target_mm / (2.0 * kLinkLengthMm) -
+                     std::sin(degToRad(kAlphaOffsetDeg));
 
-    auto best_it = candidates.begin();
-    int64_t best_distance = std::llabs(static_cast<long long>(*best_it) -
-                                       static_cast<long long>(current_count));
+    const double alpha_deg =
+        kAlphaBreakDeg - radToDeg(std::asin(clampUnit(s)));
 
-    for (auto it = std::next(candidates.begin()); it != candidates.end(); ++it)
-    {
-        const int64_t distance = std::llabs(static_cast<long long>(*it) -
-                                            static_cast<long long>(current_count));
-        if (distance < best_distance)
-        {
-            best_distance = distance;
-            best_it = it;
-        }
-    }
+    const double alpha_clamped = std::clamp(alpha_deg, kAlphaMinDeg, kAlphaMaxDeg);
+    out_count = static_cast<int32_t>(std::lround(-alpha_clamped / kDegPerCount));
 
-    out_count = *best_it;
     last_error_.clear();
     return true;
 }
@@ -531,9 +491,12 @@ int32_t GripperDevice::openingMmToBackoffDeltaCount(float delta_mm, int32_t refe
         return 0;
     }
 
-    const float opening_here = countToOpeningMm(reference_count);
-    const float opening_next = countToOpeningMm(reference_count + 1);
-    const float mm_per_count = std::max(std::abs(opening_next - opening_here), 1e-6f);
+    const float c0 = countToOpeningMm(reference_count);
+    const float c1 = countToOpeningMm(reference_count + 1);
+    const float c2 = countToOpeningMm(reference_count - 1);
+
+    const float mm_per_count =
+        std::max({std::abs(c1 - c0), std::abs(c2 - c0), 1e-6f});
 
     return static_cast<int32_t>(std::ceil(delta_mm / mm_per_count));
 }

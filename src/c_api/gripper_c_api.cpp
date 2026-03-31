@@ -34,7 +34,6 @@ bool copy_status(const gripper::GripperStatus& in, gripper_status_t* out)
     out->run_state = in.run_state;
     out->motor_enabled = in.motor_enabled ? 1 : 0;
     out->fault_code = in.fault_code;
-
     return true;
 }
 
