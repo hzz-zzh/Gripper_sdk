@@ -249,12 +249,6 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
 
         if (consecutive_hits >= config.detect_consecutive_samples)
         {
-            if (!motor_.motorOff(nullptr))
-            {
-                setLastErrorFromMotor();
-                return false;
-            }
-
             if (out != nullptr)
             {
                 out->limit_detected = true;
@@ -276,6 +270,8 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
                     out->zero_set = true;
                     out->mechanical_offset = mechanical_offset;
                 }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
 
             if (config.backoff_after_zero_mm > 0.0f)
@@ -284,13 +280,50 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
                     openingMmToBackoffDeltaCount(config.backoff_after_zero_mm, 0);
                 const int32_t backoff_delta = -config.search_direction * backoff_count_mag;
 
+                RealtimeStatus before_backoff{};
+                if (!motor_.readRealtime(before_backoff))
+                {
+                    setLastErrorFromMotor();
+                    return false;
+                }
+
                 if (!motor_.moveByCount(backoff_delta, &latest))
                 {
                     setLastErrorFromMotor();
                     return false;
                 }
 
-                if (out != nullptr)
+                const auto backoff_deadline =
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(800);
+
+                bool backoff_started = false;
+                while (std::chrono::steady_clock::now() < backoff_deadline)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+                    RealtimeStatus now{};
+                    if (!motor_.readRealtime(now))
+                    {
+                        setLastErrorFromMotor();
+                        return false;
+                    }
+
+                    latest = now;
+
+                    if (latest.fault_code != 0)
+                    {
+                        last_error_ = "fault occurred during homing backoff";
+                        return false;
+                    }
+
+                    if (std::abs(now.multi_turn_count - before_backoff.multi_turn_count) > 50)
+                    {
+                        backoff_started = true;
+                        break;
+                    }
+                }
+
+                if (out != nullptr && backoff_started)
                 {
                     out->backoff_done = true;
                 }
@@ -380,10 +413,6 @@ bool GripperDevice::moveToOpeningMmWithLimits(float target_opening_mm,
     }
 
     RealtimeStatus realtime{};
-
-    printf("target_count, speed = %d, %f\r\n", target_count, max_speed_rpm);
-
-
     if (!motor_.moveToCountWithLimits(target_count,
                                       max_speed_rpm,
                                       max_current_amp,

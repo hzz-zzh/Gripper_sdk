@@ -84,32 +84,21 @@ int main(void)
     }
 
     printf("homing ok, limit opening before zero = %.3f mm\n",
-           hr.limit_opening_mm_before_zero);
+        hr.limit_opening_mm_before_zero);
 
-               
-    
-    if (gripper_move_to_opening_mm_with_limits(h,
-                                               20.0f,
-                                               50.0f,
-                                               2.0f) != GRIPPER_API_OK)
+
+
+    while (1)
     {
-        printf("move_to_opening_mm_with_limits failed: %s\n",
-               gripper_get_last_error(h));
+        gripper_move_to_opening_mm_with_limits(h, 0.0f, 150.0f, 1.0f) ;         //0mm, 150mm/s
+        usleep(500*1000);
+        gripper_move_to_opening_mm_with_limits(h, 60.0f, 150.0f, 1.0f) ;        //60mm, 150mm/s
+        usleep(500*1000);
     }
-    else
-    {
-        gripper_status_t after_move;
-        if (gripper_read_status(h, &after_move) == GRIPPER_API_OK)
-        {
-            printf("after move:\n");
-            print_status(&after_move);
-        }
-    }
-    // usleep(4000 * 1000);
+        
 
 
-
-    // gripper_stop(h);
+    gripper_stop(h);
     gripper_disconnect(h);
     gripper_destroy(h);
     return 0;
