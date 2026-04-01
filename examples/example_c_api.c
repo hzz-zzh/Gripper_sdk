@@ -1,5 +1,6 @@
 #include "c_api/gripper_c_api.h"
 #include <stdio.h>
+#include <unistd.h>
 
 static void print_status(const gripper_status_t* st)
 {
@@ -8,11 +9,13 @@ static void print_status(const gripper_status_t* st)
         return;
     }
 
-    printf("opening=%.3f mm, speed=%.3f rpm, q_current=%.3f A, voltage=%.3f V, fault=0x%02X\n",
+    printf("opening=%.3f mm, opening_speed=%.3f mm/s, q_current=%.3f A, voltage=%.3f V, run_state=%u, enabled=%d, fault=0x%02X\n",
            st->opening_mm,
-           st->speed_rpm,
+           st->opening_speed_mm_s,
            st->q_current_amp,
            st->bus_voltage_v,
+           st->run_state,
+           st->motor_enabled,
            st->fault_code);
 }
 
@@ -59,11 +62,11 @@ int main(void)
 
     gripper_initialize_config_init(&hc);
 
-    hc.search_speed_rpm = 100.0f;
+    hc.search_speed_mm_s = 50.0f;
     hc.search_direction = +1;
     hc.poll_interval_ms = 20;
     hc.timeout_ms = 5000;
-    hc.speed_epsilon_rpm = 0.5f;
+    hc.speed_epsilon_mm_s = 0.25f;
     hc.current_threshold_a = 0.5f;
     hc.position_epsilon_mm = 0.05f;
     hc.detect_consecutive_samples = 4;
@@ -83,9 +86,11 @@ int main(void)
     printf("homing ok, limit opening before zero = %.3f mm\n",
            hr.limit_opening_mm_before_zero);
 
+               
+    
     if (gripper_move_to_opening_mm_with_limits(h,
-                                               30.0f,
-                                               200.0f,
+                                               20.0f,
+                                               50.0f,
                                                2.0f) != GRIPPER_API_OK)
     {
         printf("move_to_opening_mm_with_limits failed: %s\n",
@@ -100,8 +105,11 @@ int main(void)
             print_status(&after_move);
         }
     }
+    // usleep(4000 * 1000);
 
-    gripper_stop(h);
+
+
+    // gripper_stop(h);
     gripper_disconnect(h);
     gripper_destroy(h);
     return 0;

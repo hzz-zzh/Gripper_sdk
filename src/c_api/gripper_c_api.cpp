@@ -26,7 +26,7 @@ bool copy_status(const gripper::GripperStatus& in, gripper_status_t* out)
     }
 
     out->opening_mm = in.opening_mm;
-    out->speed_rpm = in.speed_rpm;
+    out->opening_speed_mm_s = in.opening_speed_mm_s;
     out->q_current_amp = in.q_current_amp;
     out->bus_voltage_v = in.bus_voltage_v;
     out->bus_current_a = in.bus_current_a;
@@ -148,13 +148,13 @@ void gripper_initialize_config_init(gripper_initialize_config_t* config)
         return;
     }
 
-    config->search_speed_rpm = 100.0f;
+    config->search_speed_mm_s = 50.0f;
     config->search_direction = +1;
 
     config->poll_interval_ms = 20;
     config->timeout_ms = 5000;
 
-    config->speed_epsilon_rpm = 0.5f;
+    config->speed_epsilon_mm_s = 0.25f;
     config->current_threshold_a = 0.6f;
     config->position_epsilon_mm = 0.05f;
     config->detect_consecutive_samples = 4;
@@ -174,11 +174,11 @@ int gripper_initialize(gripper_handle_t* handle,
     }
 
     gripper::GripperInitializeConfig cpp_config;
-    cpp_config.search_speed_rpm = config->search_speed_rpm;
+    cpp_config.search_speed_mm_s = config->search_speed_mm_s;
     cpp_config.search_direction = config->search_direction;
     cpp_config.poll_interval_ms = config->poll_interval_ms;
     cpp_config.timeout_ms = config->timeout_ms;
-    cpp_config.speed_epsilon_rpm = config->speed_epsilon_rpm;
+    cpp_config.speed_epsilon_mm_s = config->speed_epsilon_mm_s;
     cpp_config.current_threshold_a = config->current_threshold_a;
     cpp_config.position_epsilon_mm = config->position_epsilon_mm;
     cpp_config.detect_consecutive_samples = config->detect_consecutive_samples;
@@ -231,7 +231,7 @@ int gripper_move_to_opening_mm(gripper_handle_t* handle, float opening_mm)
 
 int gripper_move_to_opening_mm_with_limits(gripper_handle_t* handle,
                                            float opening_mm,
-                                           float max_speed_rpm,
+                                           float max_speed_mm_s,
                                            float max_current_amp)
 {
     if (handle == nullptr)
@@ -240,7 +240,7 @@ int gripper_move_to_opening_mm_with_limits(gripper_handle_t* handle,
     }
 
     if (!handle->device.moveToOpeningMmWithLimits(opening_mm,
-                                                  max_speed_rpm,
+                                                  max_speed_mm_s,
                                                   max_current_amp))
     {
         set_error_from_device(handle);

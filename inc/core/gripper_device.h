@@ -20,7 +20,7 @@ struct GripperDeviceConfig
 struct GripperStatus
 {
     float opening_mm = 0.0f;
-    float speed_rpm = 0.0f;
+    float opening_speed_mm_s = 0.0f;
     float q_current_amp = 0.0f;
     float bus_voltage_v = 0.0f;
     float bus_current_a = 0.0f;
@@ -32,13 +32,13 @@ struct GripperStatus
 
 struct GripperInitializeConfig
 {
-    float search_speed_rpm = 100.0f;
+    float search_speed_mm_s = 50.0f;
     int search_direction = +1;
 
     int poll_interval_ms = 20;
     int timeout_ms = 5000;
 
-    float speed_epsilon_rpm = 0.5f;
+    float speed_epsilon_mm_s = 0.25f;
     float current_threshold_a = 0.6f;
     float position_epsilon_mm = 0.05f;
     int detect_consecutive_samples = 4;
@@ -46,7 +46,7 @@ struct GripperInitializeConfig
     bool clear_fault_before_start = true;
     bool set_zero_after_detect = true;
 
-    float backoff_after_zero_mm = 2.0f;
+    float backoff_after_zero_mm = 5.0f;
 };
 
 struct GripperInitializeResult
@@ -81,7 +81,7 @@ public:
 
     bool moveToOpeningMm(float target_opening_mm, GripperStatus* out = nullptr);
     bool moveToOpeningMmWithLimits(float target_opening_mm,
-                                   float max_speed_rpm = 0.0f,
+                                   float max_speed_mm_s = 0.0f,
                                    float max_current_amp = 0.0f,
                                    GripperStatus* out = nullptr);
 
@@ -99,6 +99,11 @@ private:
     double countToTurbineAngleDeg(int32_t count) const;
     double turbineAngleDegToOpeningMm(double alpha_deg) const;
     float countToOpeningMm(int32_t count) const;
+
+    double openingSpeedScaleMmPerSecPerRpm(double alpha_deg) const;
+    float motorRpmToOpeningSpeedMmS(float motor_speed_rpm, int32_t count) const;
+    float openingSpeedMmSToMotorRpm(float opening_speed_mm_s, int32_t reference_count) const;
+    float openingSpeedMmSToMotorRpmConservative(float opening_speed_mm_s) const;
 
     bool openingMmToCount(float opening_mm, int32_t& out_count);
     int32_t openingMmToBackoffDeltaCount(float delta_mm, int32_t reference_count) const;

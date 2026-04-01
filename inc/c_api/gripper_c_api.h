@@ -20,7 +20,7 @@ typedef struct
 typedef struct
 {
     float opening_mm;
-    float speed_rpm;
+    float opening_speed_mm_s;
     float q_current_amp;
     float bus_voltage_v;
     float bus_current_a;
@@ -32,13 +32,13 @@ typedef struct
 
 typedef struct
 {
-    float search_speed_rpm;
+    float search_speed_mm_s;
     int search_direction;
 
     int poll_interval_ms;
     int timeout_ms;
 
-    float speed_epsilon_rpm;
+    float speed_epsilon_mm_s;
     float current_threshold_a;
     float position_epsilon_mm;
     int detect_consecutive_samples;
@@ -84,7 +84,7 @@ int gripper_is_initialized(gripper_handle_t* handle);
 int gripper_move_to_opening_mm(gripper_handle_t* handle, float opening_mm);
 int gripper_move_to_opening_mm_with_limits(gripper_handle_t* handle,
                                            float opening_mm,
-                                           float max_speed_rpm,
+                                           float max_speed_mm_s,
                                            float max_current_amp);
 
 int gripper_open(gripper_handle_t* handle);

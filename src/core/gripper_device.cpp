@@ -122,9 +122,9 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         return false;
     }
 
-    if (config.search_speed_rpm <= 0.0f)
+    if (config.search_speed_mm_s <= 0.0f)
     {
-        last_error_ = "invalid initialize config: search_speed_rpm must be > 0";
+        last_error_ = "invalid initialize config: search_speed_mm_s must be > 0";
         return false;
     }
 
@@ -143,6 +143,12 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
     if (config.detect_consecutive_samples <= 0)
     {
         last_error_ = "invalid initialize config: detect_consecutive_samples must be > 0";
+        return false;
+    }
+
+    if (config.speed_epsilon_mm_s < 0.0f)
+    {
+        last_error_ = "invalid initialize config: speed_epsilon_mm_s must be >= 0";
         return false;
     }
 
@@ -175,8 +181,11 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         }
     }
 
+    const float search_speed_rpm =
+        openingSpeedMmSToMotorRpmConservative(config.search_speed_mm_s);
+
     const float cmd_speed_rpm =
-        static_cast<float>(config.search_direction) * config.search_speed_rpm;
+        static_cast<float>(config.search_direction) * search_speed_rpm;
 
     if (!motor_.setSpeed(cmd_speed_rpm, 0, nullptr))
     {
@@ -218,7 +227,10 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
             delta_opening_mm = std::abs(latest_opening_mm - prev_opening_mm);
         }
 
-        const bool speed_small = std::abs(latest.speed_rpm) <= config.speed_epsilon_rpm;
+        const float opening_speed_mm_s =
+            motorRpmToOpeningSpeedMmS(latest.speed_rpm, latest.multi_turn_count);
+
+        const bool speed_small = std::abs(opening_speed_mm_s) <= config.speed_epsilon_mm_s;
         const bool current_high = std::abs(latest.q_current_amp) >= config.current_threshold_a;
         const bool position_locked = has_prev_status &&
                                      (delta_opening_mm <= config.position_epsilon_mm);
@@ -337,7 +349,7 @@ bool GripperDevice::moveToOpeningMm(float target_opening_mm, GripperStatus* out)
 }
 
 bool GripperDevice::moveToOpeningMmWithLimits(float target_opening_mm,
-                                              float max_speed_rpm,
+                                              float max_speed_mm_s,
                                               float max_current_amp,
                                               GripperStatus* out)
 {
@@ -353,7 +365,25 @@ bool GripperDevice::moveToOpeningMmWithLimits(float target_opening_mm,
         return false;
     }
 
+    float max_speed_rpm = 0.0f;
+    if (max_speed_mm_s > 0.0f)
+    {
+        RealtimeStatus current{};
+        if (!motor_.readRealtime(current))
+        {
+            setLastErrorFromMotor();
+            return false;
+        }
+
+        max_speed_rpm =
+            openingSpeedMmSToMotorRpm(max_speed_mm_s, current.multi_turn_count);
+    }
+
     RealtimeStatus realtime{};
+
+    printf("target_count, speed = %d, %f\r\n", target_count, max_speed_rpm);
+
+
     if (!motor_.moveToCountWithLimits(target_count,
                                       max_speed_rpm,
                                       max_current_amp,
@@ -459,6 +489,39 @@ float GripperDevice::countToOpeningMm(int32_t count) const
                                          static_cast<double>(maxOpeningMm())));
 }
 
+double GripperDevice::openingSpeedScaleMmPerSecPerRpm(double alpha_deg) const
+{
+    const double alpha = std::clamp(alpha_deg, kAlphaMinDeg, kAlphaMaxDeg);
+    return (kPi / 6.0) * std::cos(degToRad(kAlphaBreakDeg - alpha));
+}
+
+float GripperDevice::motorRpmToOpeningSpeedMmS(float motor_speed_rpm, int32_t count) const
+{
+    const double alpha_deg = countToTurbineAngleDeg(count);
+    const double scale = openingSpeedScaleMmPerSecPerRpm(alpha_deg);
+    return static_cast<float>(scale * static_cast<double>(motor_speed_rpm));
+}
+
+float GripperDevice::openingSpeedMmSToMotorRpm(float opening_speed_mm_s,
+                                               int32_t reference_count) const
+{
+    const double alpha_deg = countToTurbineAngleDeg(reference_count);
+    const double scale = openingSpeedScaleMmPerSecPerRpm(alpha_deg);
+    const double safe_scale = std::max(scale, 1e-6);
+    return static_cast<float>(static_cast<double>(opening_speed_mm_s) / safe_scale);
+}
+
+float GripperDevice::openingSpeedMmSToMotorRpmConservative(float opening_speed_mm_s) const
+{
+    if (opening_speed_mm_s <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    constexpr double kMaxScale = kPi / 6.0;
+    return static_cast<float>(static_cast<double>(opening_speed_mm_s) / kMaxScale);
+}
+
 bool GripperDevice::openingMmToCount(float opening_mm, int32_t& out_count)
 {
     const double min_mm = static_cast<double>(minOpeningMm());
@@ -504,7 +567,7 @@ int32_t GripperDevice::openingMmToBackoffDeltaCount(float delta_mm, int32_t refe
 bool GripperDevice::convertRealtimeToStatus(const RealtimeStatus& in, GripperStatus& out) const
 {
     out.opening_mm = countToOpeningMm(in.multi_turn_count);
-    out.speed_rpm = in.speed_rpm;
+    out.opening_speed_mm_s = motorRpmToOpeningSpeedMmS(in.speed_rpm, in.multi_turn_count);
     out.q_current_amp = in.q_current_amp;
     out.bus_voltage_v = in.bus_voltage_v;
     out.bus_current_a = in.bus_current_a;
