@@ -157,6 +157,11 @@ void Gripper::setTimeoutMs(int timeout_ms)
     timeout_ms_ = timeout_ms;
 }
 
+void Gripper::setDeviceAddress(uint8_t device_address)
+{
+    device_address_ = device_address;
+}
+
 const std::string& Gripper::lastError() const
 {
     return last_error_;

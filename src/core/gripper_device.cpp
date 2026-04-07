@@ -83,6 +83,61 @@ inline bool baudrateToCode(int baudrate, Rs485BaudrateCode& code)
         return false;
     }
 }
+
+inline bool isReadTimeoutError(const std::string& error)
+{
+    return error == "read timeout";
+}
+
+inline std::string faultCodeToText(uint8_t fault_code)
+{
+    if (fault_code == 0)
+    {
+        return "no fault";
+    }
+
+    std::string text;
+    if ((fault_code & (1u << 0)) != 0u)
+    {
+        text += "voltage fault, ";
+    }
+    if ((fault_code & (1u << 1)) != 0u)
+    {
+        text += "current fault, ";
+    }
+    if ((fault_code & (1u << 2)) != 0u)
+    {
+        text += "temperature fault, ";
+    }
+    if ((fault_code & (1u << 3)) != 0u)
+    {
+        text += "encoder fault, ";
+    }
+    if ((fault_code & (1u << 6)) != 0u)
+    {
+        text += "hardware fault, ";
+    }
+    if ((fault_code & (1u << 7)) != 0u)
+    {
+        text += "software fault, ";
+    }
+
+    if (!text.empty())
+    {
+        text.resize(text.size() - 2);
+    }
+    return text;
+}
+
+inline std::string makeFaultContextError(const char* context, uint8_t fault_code)
+{
+    return std::string(context) + ": " + faultCodeToText(fault_code);
+}
+
+inline const char* kCommConfigMayHaveAppliedMessage()
+{
+    return "communication config may have been applied; reconnect with new address/baudrate";
+}
 } // namespace
 
 GripperDevice::GripperDevice(const GripperDeviceConfig& config)
@@ -245,7 +300,8 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         if (latest.fault_code != 0)
         {
             motor_.motorOff(nullptr);
-            last_error_ = "fault occurred during initialize";
+            last_error_ = makeFaultContextError("fault occurred during initialize",
+                                                latest.fault_code);
             return false;
         }
 
@@ -342,7 +398,8 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
 
                     if (latest.fault_code != 0)
                     {
-                        last_error_ = "fault occurred during homing backoff";
+                        last_error_ = makeFaultContextError("fault occurred during homing backoff",
+                                                            latest.fault_code);
                         return false;
                     }
 
@@ -538,6 +595,16 @@ bool GripperDevice::setCommunicationConfig(uint8_t new_device_address, int new_b
         return false;
     }
 
+    const bool address_changed = (current.device_address != new_device_address);
+    const bool baudrate_changed = (current.rs485_baudrate != baudrate_code);
+    const bool config_changed = address_changed || baudrate_changed;
+
+    if (!config_changed)
+    {
+        last_error_.clear();
+        return true;
+    }
+
     WritableUserParameters writable{};
     writable.encoder_model = current.encoder_model;
     writable.invert_encoder_direction = current.invert_encoder_direction;
@@ -557,9 +624,23 @@ bool GripperDevice::setCommunicationConfig(uint8_t new_device_address, int new_b
     if (!motor_.writeUserParameters(writable, nullptr))
     {
         setLastErrorFromMotor();
+
+        if (config_changed && isReadTimeoutError(last_error_))
+        {
+            config_.device_address = new_device_address;
+            config_.baudrate = new_baudrate;
+            motor_.setDeviceAddress(new_device_address);
+            initialized_ = false;
+            last_error_ = kCommConfigMayHaveAppliedMessage();
+        }
+
         return false;
     }
 
+    config_.device_address = new_device_address;
+    config_.baudrate = new_baudrate;
+    motor_.setDeviceAddress(new_device_address);
+    initialized_ = false;
     last_error_.clear();
     return true;
 }

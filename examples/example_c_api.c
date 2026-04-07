@@ -9,14 +9,36 @@ static void print_status(const gripper_status_t* st)
         return;
     }
 
-    printf("opening=%.3f mm, opening_speed=%.3f mm/s, q_current=%.3f A, voltage=%.3f V, run_state=%u, enabled=%d, fault=0x%02X\n",
+    printf("opening=%.3f mm, opening_speed=%.3f mm/s, "
+           "q_current=%.3f A, bus_voltage=%.3f V, bus_current=%.3f A, "
+           "temp=%u C, run_state=%u, enabled=%d, fault=0x%02X (%s)\n",
            st->opening_mm,
            st->opening_speed_mm_s,
            st->q_current_amp,
            st->bus_voltage_v,
+           st->bus_current_a,
+           st->temperature_c,
            st->run_state,
            st->motor_enabled,
-           st->fault_code);
+           st->fault_code,
+           gripper_fault_code_to_string(st->fault_code));
+}
+
+static void print_api_error(gripper_handle_t* h, const char* action, int rc)
+{
+    const char* code_text = gripper_error_code_to_string((gripper_error_code_t)rc);
+    const char* detail = gripper_get_last_error(h);
+
+    if (code_text == NULL)
+    {
+        code_text = "unknown";
+    }
+    if (detail == NULL)
+    {
+        detail = "";
+    }
+
+    printf("%s failed: rc=%d (%s), detail=%s\n", action, rc, code_text, detail);
 }
 
 int main(void)
@@ -34,9 +56,10 @@ int main(void)
         return 1;
     }
 
-    if (gripper_connect(h) != GRIPPER_API_OK)
+    int rc = gripper_connect(h);
+    if (rc != GRIPPER_OK)
     {
-        printf("connect failed: %s\n", gripper_get_last_error(h));
+        print_api_error(h, "connect", rc);
         gripper_destroy(h);
         return 1;
     }
@@ -47,14 +70,15 @@ int main(void)
            gripper_get_max_opening_mm(h));
 
     gripper_status_t before;
-    if (gripper_read_status(h, &before) == GRIPPER_API_OK)
+    rc = gripper_read_status(h, &before);
+    if (rc == GRIPPER_OK)
     {
         printf("before homing:\n");
         print_status(&before);
     }
     else
     {
-        printf("read_status before homing failed: %s\n", gripper_get_last_error(h));
+        print_api_error(h, "read_status before homing", rc);
     }
 
     gripper_initialize_config_t hc;
@@ -75,30 +99,64 @@ int main(void)
     hc.backoff_after_zero_mm = 2.0f;
 
     printf("start homing...\n");
-    if (gripper_initialize(h, &hc, &hr) != GRIPPER_API_OK)
+    rc = gripper_initialize(h, &hc, &hr);
+    if (rc != GRIPPER_OK)
     {
-        printf("homing failed: %s\n", gripper_get_last_error(h));
+        print_api_error(h, "homing", rc);
         gripper_disconnect(h);
         gripper_destroy(h);
         return 1;
     }
 
-    printf("homing ok, limit opening before zero = %.3f mm\n",
-        hr.limit_opening_mm_before_zero);
-
-
+    printf("homing ok\n");
+    printf("  limit_detected               = %d\n", hr.limit_detected);
+    printf("  zero_set                     = %d\n", hr.zero_set);
+    printf("  backoff_done                 = %d\n", hr.backoff_done);
+    printf("  detect_samples               = %d\n", hr.detect_samples);
+    printf("  limit_opening_before_zero    = %.3f mm\n", hr.limit_opening_mm_before_zero);
+    printf("  mechanical_offset            = %u\n", hr.mechanical_offset);
+    printf("final status after homing:\n");
+    print_status(&hr.final_status);
 
     while (1)
     {
-        gripper_move_to_opening_mm_with_limits(h, 0.0f, 150.0f, 1.0f) ;         //0mm, 150mm/s
-        usleep(500*1000);
-        gripper_move_to_opening_mm_with_limits(h, 60.0f, 150.0f, 1.0f) ;        //60mm, 150mm/s
-        usleep(500*1000);
+        rc = gripper_move_to_opening_mm_with_limits(h, 0.0f, 150.0f, 1.0f);
+        if (rc != GRIPPER_OK)
+        {
+            print_api_error(h, "move to 0.0 mm", rc);
+            break;
+        }
+
+        usleep(500 * 1000);
+
+        rc = gripper_move_to_opening_mm_with_limits(h, 60.0f, 150.0f, 1.0f);
+        if (rc != GRIPPER_OK)
+        {
+            print_api_error(h, "move to 60.0 mm", rc);
+            break;
+        }
+
+        usleep(500 * 1000);
+
+        gripper_status_t st;
+        rc = gripper_read_status(h, &st);
+        if (rc == GRIPPER_OK)
+        {
+            print_status(&st);
+        }
+        else
+        {
+            print_api_error(h, "read_status in loop", rc);
+            break;
+        }
     }
-        
 
+    rc = gripper_stop(h);
+    if (rc != GRIPPER_OK)
+    {
+        print_api_error(h, "stop", rc);
+    }
 
-    gripper_stop(h);
     gripper_disconnect(h);
     gripper_destroy(h);
     return 0;

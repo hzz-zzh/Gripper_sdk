@@ -171,6 +171,7 @@ public:
     bool isConnected() const;
 
     void setTimeoutMs(int timeout_ms);
+    void setDeviceAddress(uint8_t device_address);
     const std::string& lastError() const;
 
     bool readVersion(VersionInfo& out);

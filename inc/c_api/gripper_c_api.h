@@ -61,12 +61,33 @@ typedef struct
     gripper_status_t final_status;
 } gripper_initialize_result_t;
 
-enum
+typedef enum
 {
-    GRIPPER_API_OK = 0,
-    GRIPPER_API_ERROR = -1,
-    GRIPPER_API_INVALID_ARGUMENT = -2
-};
+    GRIPPER_OK = 0,
+
+    GRIPPER_ERR_INVALID_ARGUMENT = -1,
+    GRIPPER_ERR_NOT_CONNECTED = -2,
+    GRIPPER_ERR_NOT_INITIALIZED = -3,
+
+    GRIPPER_ERR_TIMEOUT = -10,
+    GRIPPER_ERR_TRANSPORT = -11,
+    GRIPPER_ERR_PROTOCOL = -12,
+    GRIPPER_ERR_BAD_RESPONSE = -13,
+
+    GRIPPER_ERR_OUT_OF_RANGE = -20,
+    GRIPPER_ERR_INVALID_CONFIG = -21,
+    GRIPPER_ERR_INVALID_STATE = -22,
+
+    GRIPPER_ERR_DEVICE_FAULT = -30,
+    GRIPPER_ERR_OPERATION_FAILED = -31,
+
+    GRIPPER_ERR_COMM_CONFIG_APPLIED = 1
+} gripper_error_code_t;
+
+/* 兼容旧接口习惯： */
+#define GRIPPER_API_OK GRIPPER_OK
+#define GRIPPER_API_ERROR GRIPPER_ERR_OPERATION_FAILED
+#define GRIPPER_API_INVALID_ARGUMENT GRIPPER_ERR_INVALID_ARGUMENT
 
 gripper_handle_t* gripper_create(const gripper_config_t* config);
 void gripper_destroy(gripper_handle_t* handle);
@@ -95,13 +116,23 @@ int gripper_read_status(gripper_handle_t* handle, gripper_status_t* out_status);
 int gripper_reboot(gripper_handle_t* handle);
 
 int gripper_set_communication_config(gripper_handle_t* handle,
-                                   uint8_t new_device_address,
-                                   int new_baudrate);
+                                     uint8_t new_device_address,
+                                     int new_baudrate);
 
 float gripper_get_min_opening_mm(gripper_handle_t* handle);
 float gripper_get_max_opening_mm(gripper_handle_t* handle);
 
+gripper_error_code_t gripper_get_last_error_code(gripper_handle_t* handle);
 const char* gripper_get_last_error(gripper_handle_t* handle);
+const char* gripper_error_code_to_string(gripper_error_code_t code);
+
+const char* gripper_fault_code_to_string(uint8_t fault_code);
+int gripper_fault_code_has_voltage_fault(uint8_t fault_code);
+int gripper_fault_code_has_current_fault(uint8_t fault_code);
+int gripper_fault_code_has_temperature_fault(uint8_t fault_code);
+int gripper_fault_code_has_encoder_fault(uint8_t fault_code);
+int gripper_fault_code_has_hardware_fault(uint8_t fault_code);
+int gripper_fault_code_has_software_fault(uint8_t fault_code);
 
 #ifdef __cplusplus
 }

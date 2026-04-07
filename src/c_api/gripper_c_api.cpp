@@ -9,9 +9,10 @@ struct gripper_handle
 {
     gripper::GripperDevice device;
     std::string last_error;
+    gripper_error_code_t last_error_code;
 
     explicit gripper_handle(const gripper::GripperDeviceConfig& config)
-        : device(config), last_error()
+        : device(config), last_error(), last_error_code(GRIPPER_OK)
     {
     }
 };
@@ -57,20 +58,174 @@ bool copy_initialize_result(const gripper::GripperInitializeResult& in,
     return true;
 }
 
-void set_error(gripper_handle* handle, const std::string& err)
+bool starts_with(const std::string& text, const char* prefix)
+{
+    const std::string prefix_str(prefix);
+    return text.rfind(prefix_str, 0) == 0;
+}
+
+gripper_error_code_t map_error_to_code(const std::string& err)
+{
+    if (err.empty())
+    {
+        return GRIPPER_OK;
+    }
+
+    if (err == "communication config may have been applied; reconnect with new address/baudrate")
+    {
+        return GRIPPER_ERR_COMM_CONFIG_APPLIED;
+    }
+
+    if (err == "invalid handle")
+    {
+        return GRIPPER_ERR_INVALID_ARGUMENT;
+    }
+
+    if (starts_with(err, "invalid initialize config:"))
+    {
+        return GRIPPER_ERR_INVALID_CONFIG;
+    }
+
+    if (err == "invalid max_speed_rpm" ||
+        err == "invalid max_current_amp" ||
+        err == "invalid device address: expected 1~254" ||
+        err == "invalid RS485 baudrate: expected one of 9600/19200/38400/57600/115200/460800/921600")
+    {
+        return GRIPPER_ERR_INVALID_ARGUMENT;
+    }
+
+    if (err == "device not connected")
+    {
+        return GRIPPER_ERR_NOT_CONNECTED;
+    }
+
+    if (err == "gripper not initialized")
+    {
+        return GRIPPER_ERR_NOT_INITIALIZED;
+    }
+
+    if (err == "read timeout" || err == "initialize timeout")
+    {
+        return GRIPPER_ERR_TIMEOUT;
+    }
+
+    if (err == "failed to open transport" ||
+        err == "failed to open rs485 port" ||
+        err == "transport not ready" ||
+        err == "transport write failed" ||
+        err == "transport read failed")
+    {
+        return GRIPPER_ERR_TRANSPORT;
+    }
+
+    if (starts_with(err, "invalid version payload length") ||
+        starts_with(err, "invalid clear-fault payload length") ||
+        starts_with(err, "invalid zero-point payload length") ||
+        starts_with(err, "invalid restore-default payload length") ||
+        starts_with(err, "invalid brake-control payload length") ||
+        starts_with(err, "invalid user-parameters payload length") ||
+        starts_with(err, "invalid motion-control-parameters payload length") ||
+        starts_with(err, "invalid motor-hardware-parameters payload length") ||
+        starts_with(err, "invalid realtime payload length") ||
+        err == "skipped frame with invalid payload length" ||
+        starts_with(err, "skipped malformed frame:"))
+    {
+        return GRIPPER_ERR_PROTOCOL;
+    }
+
+    if (err == "skipped non-slave header byte" ||
+        err == "skipped unexpected response sequence" ||
+        err == "skipped unexpected response command" ||
+        err == "skipped unexpected response device")
+    {
+        return GRIPPER_ERR_BAD_RESPONSE;
+    }
+
+    if (err == "target opening_mm is outside the valid geometry range")
+    {
+        return GRIPPER_ERR_OUT_OF_RANGE;
+    }
+
+    if (starts_with(err, "fault occurred during"))
+    {
+        return GRIPPER_ERR_DEVICE_FAULT;
+    }
+
+    return GRIPPER_ERR_OPERATION_FAILED;
+}
+
+std::string fault_code_to_text_cpp(uint8_t fault_code)
+{
+    if (fault_code == 0)
+    {
+        return "no fault";
+    }
+
+    std::string text;
+    if ((fault_code & (1u << 0)) != 0u)
+    {
+        text += "voltage fault, ";
+    }
+    if ((fault_code & (1u << 1)) != 0u)
+    {
+        text += "current fault, ";
+    }
+    if ((fault_code & (1u << 2)) != 0u)
+    {
+        text += "temperature fault, ";
+    }
+    if ((fault_code & (1u << 3)) != 0u)
+    {
+        text += "encoder fault, ";
+    }
+    if ((fault_code & (1u << 6)) != 0u)
+    {
+        text += "hardware fault, ";
+    }
+    if ((fault_code & (1u << 7)) != 0u)
+    {
+        text += "software fault, ";
+    }
+
+    if (!text.empty())
+    {
+        text.resize(text.size() - 2);
+    }
+    return text;
+}
+
+void set_error(gripper_handle* handle,
+               gripper_error_code_t code,
+               const std::string& err)
 {
     if (handle != nullptr)
     {
+        handle->last_error_code = code;
         handle->last_error = err;
     }
 }
 
-void set_error_from_device(gripper_handle* handle)
+void clear_error(gripper_handle* handle)
 {
     if (handle != nullptr)
     {
-        handle->last_error = handle->device.lastError();
+        handle->last_error_code = GRIPPER_OK;
+        handle->last_error.clear();
     }
+}
+
+gripper_error_code_t set_error_from_device(gripper_handle* handle)
+{
+    if (handle == nullptr)
+    {
+        return GRIPPER_ERR_INVALID_ARGUMENT;
+    }
+
+    const std::string err = handle->device.lastError();
+    const gripper_error_code_t code = map_error_to_code(err);
+    handle->last_error_code = code;
+    handle->last_error = err;
+    return code;
 }
 } // namespace
 
@@ -108,17 +263,16 @@ int gripper_connect(gripper_handle_t* handle)
 {
     if (handle == nullptr)
     {
-        return GRIPPER_API_INVALID_ARGUMENT;
+        return GRIPPER_ERR_INVALID_ARGUMENT;
     }
 
     if (!handle->device.connect())
     {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
+        return static_cast<int>(set_error_from_device(handle));
     }
 
-    set_error(handle, "");
-    return GRIPPER_API_OK;
+    clear_error(handle);
+    return GRIPPER_OK;
 }
 
 void gripper_disconnect(gripper_handle_t* handle)
@@ -170,7 +324,7 @@ int gripper_initialize(gripper_handle_t* handle,
 {
     if (handle == nullptr || config == nullptr)
     {
-        return GRIPPER_API_INVALID_ARGUMENT;
+        return GRIPPER_ERR_INVALID_ARGUMENT;
     }
 
     gripper::GripperInitializeConfig cpp_config;
@@ -189,8 +343,7 @@ int gripper_initialize(gripper_handle_t* handle,
     gripper::GripperInitializeResult cpp_result{};
     if (!handle->device.initialize(cpp_config, &cpp_result))
     {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
+        return static_cast<int>(set_error_from_device(handle));
     }
 
     if (out_result != nullptr)
@@ -198,8 +351,8 @@ int gripper_initialize(gripper_handle_t* handle,
         copy_initialize_result(cpp_result, out_result);
     }
 
-    set_error(handle, "");
-    return GRIPPER_API_OK;
+    clear_error(handle);
+    return GRIPPER_OK;
 }
 
 int gripper_is_initialized(gripper_handle_t* handle)
@@ -216,17 +369,16 @@ int gripper_move_to_opening_mm(gripper_handle_t* handle, float opening_mm)
 {
     if (handle == nullptr)
     {
-        return GRIPPER_API_INVALID_ARGUMENT;
+        return GRIPPER_ERR_INVALID_ARGUMENT;
     }
 
     if (!handle->device.moveToOpeningMm(opening_mm))
     {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
+        return static_cast<int>(set_error_from_device(handle));
     }
 
-    set_error(handle, "");
-    return GRIPPER_API_OK;
+    clear_error(handle);
+    return GRIPPER_OK;
 }
 
 int gripper_move_to_opening_mm_with_limits(gripper_handle_t* handle,
@@ -236,125 +388,118 @@ int gripper_move_to_opening_mm_with_limits(gripper_handle_t* handle,
 {
     if (handle == nullptr)
     {
-        return GRIPPER_API_INVALID_ARGUMENT;
+        return GRIPPER_ERR_INVALID_ARGUMENT;
     }
 
     if (!handle->device.moveToOpeningMmWithLimits(opening_mm,
                                                   max_speed_mm_s,
                                                   max_current_amp))
     {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
+        return static_cast<int>(set_error_from_device(handle));
     }
 
-    set_error(handle, "");
-    return GRIPPER_API_OK;
+    clear_error(handle);
+    return GRIPPER_OK;
 }
 
 int gripper_open(gripper_handle_t* handle)
 {
     if (handle == nullptr)
     {
-        return GRIPPER_API_INVALID_ARGUMENT;
+        return GRIPPER_ERR_INVALID_ARGUMENT;
     }
 
     if (!handle->device.open())
     {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
+        return static_cast<int>(set_error_from_device(handle));
     }
 
-    set_error(handle, "");
-    return GRIPPER_API_OK;
+    clear_error(handle);
+    return GRIPPER_OK;
 }
 
 int gripper_close(gripper_handle_t* handle)
 {
     if (handle == nullptr)
     {
-        return GRIPPER_API_INVALID_ARGUMENT;
+        return GRIPPER_ERR_INVALID_ARGUMENT;
     }
 
     if (!handle->device.close())
     {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
+        return static_cast<int>(set_error_from_device(handle));
     }
 
-    set_error(handle, "");
-    return GRIPPER_API_OK;
+    clear_error(handle);
+    return GRIPPER_OK;
 }
 
 int gripper_stop(gripper_handle_t* handle)
 {
     if (handle == nullptr)
     {
-        return GRIPPER_API_INVALID_ARGUMENT;
+        return GRIPPER_ERR_INVALID_ARGUMENT;
     }
 
     if (!handle->device.stop())
     {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
+        return static_cast<int>(set_error_from_device(handle));
     }
 
-    set_error(handle, "");
-    return GRIPPER_API_OK;
+    clear_error(handle);
+    return GRIPPER_OK;
 }
 
 int gripper_read_status(gripper_handle_t* handle, gripper_status_t* out_status)
 {
     if (handle == nullptr || out_status == nullptr)
     {
-        return GRIPPER_API_INVALID_ARGUMENT;
+        return GRIPPER_ERR_INVALID_ARGUMENT;
     }
 
     gripper::GripperStatus status{};
     if (!handle->device.readStatus(status))
     {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
+        return static_cast<int>(set_error_from_device(handle));
     }
 
     copy_status(status, out_status);
-    set_error(handle, "");
-    return GRIPPER_API_OK;
+    clear_error(handle);
+    return GRIPPER_OK;
 }
 
 int gripper_reboot(gripper_handle_t* handle)
 {
     if (handle == nullptr)
     {
-        return GRIPPER_API_INVALID_ARGUMENT;
+        return GRIPPER_ERR_INVALID_ARGUMENT;
     }
 
     if (!handle->device.reboot())
     {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
+        return static_cast<int>(set_error_from_device(handle));
     }
 
-    set_error(handle, "");
-    return GRIPPER_API_OK;
+    clear_error(handle);
+    return GRIPPER_OK;
 }
 
 int gripper_set_communication_config(gripper_handle_t* handle,
-                                   uint8_t new_device_address,
-                                   int new_baudrate)
+                                     uint8_t new_device_address,
+                                     int new_baudrate)
 {
     if (handle == nullptr)
     {
-        return GRIPPER_API_INVALID_ARGUMENT;
+        return GRIPPER_ERR_INVALID_ARGUMENT;
     }
 
     if (!handle->device.setCommunicationConfig(new_device_address, new_baudrate))
     {
-        set_error_from_device(handle);
-        return GRIPPER_API_ERROR;
+        return static_cast<int>(set_error_from_device(handle));
     }
 
-    set_error(handle, "");
-    return GRIPPER_API_OK;
+    clear_error(handle);
+    return GRIPPER_OK;
 }
 
 float gripper_get_min_opening_mm(gripper_handle_t* handle)
@@ -377,6 +522,16 @@ float gripper_get_max_opening_mm(gripper_handle_t* handle)
     return handle->device.maxOpeningMm();
 }
 
+gripper_error_code_t gripper_get_last_error_code(gripper_handle_t* handle)
+{
+    if (handle == nullptr)
+    {
+        return GRIPPER_ERR_INVALID_ARGUMENT;
+    }
+
+    return handle->last_error_code;
+}
+
 const char* gripper_get_last_error(gripper_handle_t* handle)
 {
     if (handle == nullptr)
@@ -385,5 +540,79 @@ const char* gripper_get_last_error(gripper_handle_t* handle)
     }
 
     return handle->last_error.c_str();
+}
+
+const char* gripper_error_code_to_string(gripper_error_code_t code)
+{
+    switch (code)
+    {
+    case GRIPPER_OK:
+        return "ok";
+    case GRIPPER_ERR_INVALID_ARGUMENT:
+        return "invalid argument";
+    case GRIPPER_ERR_NOT_CONNECTED:
+        return "device not connected";
+    case GRIPPER_ERR_NOT_INITIALIZED:
+        return "gripper not initialized";
+    case GRIPPER_ERR_TIMEOUT:
+        return "timeout";
+    case GRIPPER_ERR_TRANSPORT:
+        return "transport error";
+    case GRIPPER_ERR_PROTOCOL:
+        return "protocol error";
+    case GRIPPER_ERR_BAD_RESPONSE:
+        return "unexpected response";
+    case GRIPPER_ERR_OUT_OF_RANGE:
+        return "out of range";
+    case GRIPPER_ERR_INVALID_CONFIG:
+        return "invalid config";
+    case GRIPPER_ERR_INVALID_STATE:
+        return "invalid state";
+    case GRIPPER_ERR_DEVICE_FAULT:
+        return "device fault";
+    case GRIPPER_ERR_OPERATION_FAILED:
+        return "operation failed";
+    case GRIPPER_ERR_COMM_CONFIG_APPLIED:
+        return "communication config may have been applied";
+    default:
+        return "unknown error";
+    }
+}
+
+const char* gripper_fault_code_to_string(uint8_t fault_code)
+{
+    static thread_local std::string text;
+    text = fault_code_to_text_cpp(fault_code);
+    return text.c_str();
+}
+
+int gripper_fault_code_has_voltage_fault(uint8_t fault_code)
+{
+    return ((fault_code & (1u << 0)) != 0u) ? 1 : 0;
+}
+
+int gripper_fault_code_has_current_fault(uint8_t fault_code)
+{
+    return ((fault_code & (1u << 1)) != 0u) ? 1 : 0;
+}
+
+int gripper_fault_code_has_temperature_fault(uint8_t fault_code)
+{
+    return ((fault_code & (1u << 2)) != 0u) ? 1 : 0;
+}
+
+int gripper_fault_code_has_encoder_fault(uint8_t fault_code)
+{
+    return ((fault_code & (1u << 3)) != 0u) ? 1 : 0;
+}
+
+int gripper_fault_code_has_hardware_fault(uint8_t fault_code)
+{
+    return ((fault_code & (1u << 6)) != 0u) ? 1 : 0;
+}
+
+int gripper_fault_code_has_software_fault(uint8_t fault_code)
+{
+    return ((fault_code & (1u << 7)) != 0u) ? 1 : 0;
 }
 } // extern "C"
