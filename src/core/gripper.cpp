@@ -478,20 +478,53 @@ bool Gripper::readUserParameters(UserParameters& out)
 
 bool Gripper::writeUserParameters(const WritableUserParameters& in, UserParameters* out)
 {
+    if (!isConnected())
+    {
+        last_error_ = "device not connected";
+        return false;
+    }
+
     const std::vector<uint8_t> payload = buildWritableUserParametersPayload(in);
+    const uint8_t request_device_address = device_address_;
+    const uint8_t response_device_address = request_device_address;
+
+    const uint8_t seq = next_sequence_++;
+    const auto request = protocol::buildRequest(seq, request_device_address, protocol::Command::WriteUserParams, payload);
+
+    std::size_t written = 0;
+    while (written < request.size())
+    {
+        const int write_ret = transport_->writeBytes(request.data() + written, request.size() - written);
+        if (write_ret <= 0)
+        {
+            last_error_ = "transport write failed";
+            return false;
+        }
+
+        written += static_cast<std::size_t>(write_ret);
+    }
 
     protocol::Frame response;
-    if (!transact(protocol::Command::WriteUserParams, payload, response, true))
+    if (!readResponseForDevice(response, seq, protocol::Command::WriteUserParams, response_device_address))
     {
         return false;
     }
 
     if (out)
     {
-        return parseUserParametersPayload(response.payload, *out, last_error_);
+        if (!parseUserParametersPayload(response.payload, *out, last_error_))
+        {
+            return false;
+        }
     }
 
+    last_error_.clear();
     return true;
+}
+
+uint8_t Gripper::deviceAddress() const
+{
+    return device_address_;
 }
 
 bool Gripper::parseUserParametersPayload(const std::vector<uint8_t>& payload,
@@ -815,6 +848,14 @@ bool Gripper::readResponse(protocol::Frame& frame,
                            uint8_t expected_sequence,
                            protocol::Command expected_command)
 {
+    return readResponseForDevice(frame, expected_sequence, expected_command, device_address_);
+}
+
+bool Gripper::readResponseForDevice(protocol::Frame& frame,
+                                    uint8_t expected_sequence,
+                                    protocol::Command expected_command,
+                                    uint8_t expected_device_address)
+{
     if (!transport_)
     {
         last_error_ = "transport not ready";
@@ -892,7 +933,7 @@ bool Gripper::readResponse(protocol::Frame& frame,
             continue;
         }
 
-        if (!isExpectedResponseDevice(candidate.device))
+        if (!isExpectedResponseDeviceFor(expected_device_address, candidate.device))
         {
             last_skipped_reason = "skipped unexpected response device";
             continue;
@@ -908,12 +949,18 @@ bool Gripper::readResponse(protocol::Frame& frame,
 
 bool Gripper::isExpectedResponseDevice(uint8_t response_device) const
 {
-    if (device_address_ == 0xFF)
+    return isExpectedResponseDeviceFor(device_address_, response_device);
+}
+
+bool Gripper::isExpectedResponseDeviceFor(uint8_t requested_device_address,
+                                          uint8_t response_device)
+{
+    if (requested_device_address == 0xFF)
     {
         return response_device != 0x00 && response_device != 0xFF;
     }
 
-    return response_device == device_address_;
+    return response_device == requested_device_address;
 }
 
 bool Gripper::parseRealtimePayload(const std::vector<uint8_t>& payload,

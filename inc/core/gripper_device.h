@@ -92,6 +92,8 @@ public:
     bool readStatus(GripperStatus& out);
     bool reboot();
 
+    bool setCommunicationConfig(uint8_t new_device_address, int new_baudrate);
+
     float minOpeningMm() const;
     float maxOpeningMm() const;
 
@@ -109,6 +111,7 @@ private:
     int32_t openingMmToBackoffDeltaCount(float delta_mm, int32_t reference_count) const;
     bool convertRealtimeToStatus(const RealtimeStatus& in, GripperStatus& out) const;
     void setLastErrorFromMotor();
+
 
 private:
     GripperDeviceConfig config_;

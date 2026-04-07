@@ -338,6 +338,25 @@ int gripper_reboot(gripper_handle_t* handle)
     return GRIPPER_API_OK;
 }
 
+int gripper_set_communication_config(gripper_handle_t* handle,
+                                   uint8_t new_device_address,
+                                   int new_baudrate)
+{
+    if (handle == nullptr)
+    {
+        return GRIPPER_API_INVALID_ARGUMENT;
+    }
+
+    if (!handle->device.setCommunicationConfig(new_device_address, new_baudrate))
+    {
+        set_error_from_device(handle);
+        return GRIPPER_API_ERROR;
+    }
+
+    set_error(handle, "");
+    return GRIPPER_API_OK;
+}
+
 float gripper_get_min_opening_mm(gripper_handle_t* handle)
 {
     if (handle == nullptr)

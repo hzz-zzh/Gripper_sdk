@@ -205,6 +205,8 @@ public:
     bool readUserParameters(UserParameters& out);
     bool writeUserParameters(const WritableUserParameters& in, UserParameters* out = nullptr);
 
+    uint8_t deviceAddress() const;
+
     bool readMotionControlParameters(MotionControlParameters& out);
     bool writeMotionControlParametersTemp(const MotionControlParameters& in,
                                           MotionControlParameters* out = nullptr);
@@ -231,7 +233,14 @@ private:
                       uint8_t expected_sequence,
                       protocol::Command expected_command);
 
+    bool readResponseForDevice(protocol::Frame& frame,
+                               uint8_t expected_sequence,
+                               protocol::Command expected_command,
+                               uint8_t expected_device_address);
+
     bool isExpectedResponseDevice(uint8_t response_device) const;
+    static bool isExpectedResponseDeviceFor(uint8_t requested_device_address,
+                                            uint8_t response_device);
 
     static bool parseRealtimePayload(const std::vector<uint8_t>& payload,
                                      RealtimeStatus& out,

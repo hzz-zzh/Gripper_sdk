@@ -94,6 +94,10 @@ int gripper_stop(gripper_handle_t* handle);
 int gripper_read_status(gripper_handle_t* handle, gripper_status_t* out_status);
 int gripper_reboot(gripper_handle_t* handle);
 
+int gripper_set_communication_config(gripper_handle_t* handle,
+                                   uint8_t new_device_address,
+                                   int new_baudrate);
+
 float gripper_get_min_opening_mm(gripper_handle_t* handle);
 float gripper_get_max_opening_mm(gripper_handle_t* handle);
 

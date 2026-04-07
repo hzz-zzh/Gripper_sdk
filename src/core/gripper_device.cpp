@@ -53,6 +53,36 @@ inline double maxOpeningFromFormula()
            (std::sin(degToRad(kAlphaBreakDeg)) +
             std::sin(degToRad(kAlphaOffsetDeg)));
 }
+
+inline bool baudrateToCode(int baudrate, Rs485BaudrateCode& code)
+{
+    switch (baudrate)
+    {
+    case 921600:
+        code = Rs485BaudrateCode::Baud921600;
+        return true;
+    case 460800:
+        code = Rs485BaudrateCode::Baud460800;
+        return true;
+    case 115200:
+        code = Rs485BaudrateCode::Baud115200;
+        return true;
+    case 57600:
+        code = Rs485BaudrateCode::Baud57600;
+        return true;
+    case 38400:
+        code = Rs485BaudrateCode::Baud38400;
+        return true;
+    case 19200:
+        code = Rs485BaudrateCode::Baud19200;
+        return true;
+    case 9600:
+        code = Rs485BaudrateCode::Baud9600;
+        return true;
+    default:
+        return false;
+    }
+}
 } // namespace
 
 GripperDevice::GripperDevice(const GripperDeviceConfig& config)
@@ -482,6 +512,54 @@ bool GripperDevice::reboot()
     }
 
     initialized_ = false;
+    last_error_.clear();
+    return true;
+}
+
+bool GripperDevice::setCommunicationConfig(uint8_t new_device_address, int new_baudrate)
+{
+    if (new_device_address == 0 || new_device_address == 0xFF)
+    {
+        last_error_ = "invalid device address: expected 1~254";
+        return false;
+    }
+
+    Rs485BaudrateCode baudrate_code = Rs485BaudrateCode::Baud115200;
+    if (!baudrateToCode(new_baudrate, baudrate_code))
+    {
+        last_error_ = "invalid RS485 baudrate: expected one of 9600/19200/38400/57600/115200/460800/921600";
+        return false;
+    }
+
+    UserParameters current{};
+    if (!motor_.readUserParameters(current))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    WritableUserParameters writable{};
+    writable.encoder_model = current.encoder_model;
+    writable.invert_encoder_direction = current.invert_encoder_direction;
+    writable.enable_second_encoder = current.enable_second_encoder;
+    writable.speed_filter_coeff = current.speed_filter_coeff;
+    writable.device_address = new_device_address;
+    writable.rs485_baudrate = baudrate_code;
+    writable.can_baudrate = current.can_baudrate;
+    writable.enable_canopen = current.enable_canopen;
+    writable.max_bus_voltage_0p01v = current.max_bus_voltage_0p01v;
+    writable.voltage_fault_delay_s = current.voltage_fault_delay_s;
+    writable.max_bus_current_0p01a = current.max_bus_current_0p01a;
+    writable.current_fault_delay_s = current.current_fault_delay_s;
+    writable.max_temperature_c = current.max_temperature_c;
+    writable.temperature_fault_delay_s = current.temperature_fault_delay_s;
+
+    if (!motor_.writeUserParameters(writable, nullptr))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
     last_error_.clear();
     return true;
 }
