@@ -91,7 +91,7 @@ int main(void)
     hc.poll_interval_ms = 20;
     hc.timeout_ms = 5000;
     hc.speed_epsilon_mm_s = 0.25f;
-    hc.current_threshold_a = 0.5f;
+    hc.current_threshold_a = 0.3f;
     hc.position_epsilon_mm = 0.05f;
     hc.detect_consecutive_samples = 4;
     hc.clear_fault_before_start = 1;
@@ -120,25 +120,35 @@ int main(void)
 
     while (1)
     {
-        rc = gripper_move_to_opening_mm_with_limits(h, 0.0f, 150.0f, 1.0f);
+        rc = gripper_move_to_opening_mm_with_limits(h, 0.0f, 170.0f, 0.5f);
         if (rc != GRIPPER_OK)
         {
             print_api_error(h, "move to 0.0 mm", rc);
             break;
         }
 
-        usleep(500 * 1000);
+        usleep(800 * 1000);
+        gripper_status_t st;
+        rc = gripper_read_status(h, &st);
+        if (rc == GRIPPER_OK)
+        {
+            print_status(&st);
+        }
+        else
+        {
+            print_api_error(h, "read_status in loop", rc);
+            break;
+        }
 
-        rc = gripper_move_to_opening_mm_with_limits(h, 60.0f, 150.0f, 1.0f);
+        rc = gripper_move_to_opening_mm_with_limits(h, 70.0f, 170.0f, 0.5f);
         if (rc != GRIPPER_OK)
         {
             print_api_error(h, "move to 60.0 mm", rc);
             break;
         }
 
-        usleep(500 * 1000);
+        usleep(800 * 1000);
 
-        gripper_status_t st;
         rc = gripper_read_status(h, &st);
         if (rc == GRIPPER_OK)
         {
