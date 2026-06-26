@@ -315,6 +315,11 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         }
     }
 
+    if (!releaseOpeningLimit(config, config.search_direction, open_limit))
+    {
+        return false;
+    }
+
     RealtimeStatus close_limit{};
     int close_detect_samples = 0;
     if (!searchLimitByStall(config,
@@ -377,6 +382,8 @@ bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
         std::chrono::steady_clock::now() + std::chrono::milliseconds(config.timeout_ms);
 
     bool has_prev_status = false;
+    bool has_start_status = false;
+    int32_t start_count = 0;
     RealtimeStatus prev_status{};
     int consecutive_hits = 0;
     RealtimeStatus latest{};
@@ -390,6 +397,12 @@ bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
             setLastErrorFromMotor();
             motor_.motorOff(nullptr);
             return false;
+        }
+
+        if (!has_start_status)
+        {
+            start_count = latest.multi_turn_count;
+            has_start_status = true;
         }
 
         if (latest.fault_code != 0)
@@ -414,8 +427,17 @@ bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
         const bool current_high = std::abs(latest.q_current_amp) >= config.current_threshold_a;
         const bool position_locked = has_prev_status &&
                                      (delta_opening_mm <= config.position_epsilon_mm);
+        const int32_t min_travel_count =
+            openingMmToBackoffDeltaCount(1.0f, start_count);
+        const bool moved_far_enough =
+            std::abs(latest.multi_turn_count - start_count) >= min_travel_count;
+        const bool stalled_at_existing_limit =
+            current_high && (speed_small || position_locked);
+        const bool stalled_after_travel =
+            moved_far_enough && position_locked &&
+            (speed_small || current_high);
 
-        if (speed_small && current_high && position_locked)
+        if (stalled_at_existing_limit || stalled_after_travel)
         {
             ++consecutive_hits;
         }
@@ -437,6 +459,58 @@ bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
 
     motor_.motorOff(nullptr);
     last_error_ = timeout_error;
+    return false;
+}
+
+bool GripperDevice::releaseOpeningLimit(const GripperInitializeConfig& config,
+                                        int search_direction,
+                                        const RealtimeStatus& open_limit)
+{
+    const float release_mm = std::max(config.backoff_after_zero_mm, 1.0f);
+    const int32_t release_count =
+        openingMmToBackoffDeltaCount(release_mm, open_limit.multi_turn_count);
+    const int32_t release_delta = -search_direction * release_count;
+    const int32_t min_started_delta = std::min<int32_t>(release_count, 50);
+
+    RealtimeStatus latest{};
+    if (!motor_.moveByCount(release_delta, &latest))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(config.timeout_ms);
+
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (latest.fault_code != 0)
+        {
+            motor_.motorOff(nullptr);
+            last_error_ = makeFaultContextError("fault occurred while releasing opening limit",
+                                                latest.fault_code);
+            return false;
+        }
+
+        const int32_t moved_count =
+            std::abs(latest.multi_turn_count - open_limit.multi_turn_count);
+        if (moved_count >= min_started_delta)
+        {
+            return true;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(config.poll_interval_ms));
+
+        if (!motor_.readRealtime(latest))
+        {
+            setLastErrorFromMotor();
+            motor_.motorOff(nullptr);
+            return false;
+        }
+    }
+
+    motor_.motorOff(nullptr);
+    last_error_ = "opening limit release timeout";
     return false;
 }
 

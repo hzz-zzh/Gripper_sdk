@@ -114,6 +114,9 @@ private:
                             const char* timeout_error,
                             RealtimeStatus& out_limit_status,
                             int& out_detect_samples);
+    bool releaseOpeningLimit(const GripperInitializeConfig& config,
+                             int search_direction,
+                             const RealtimeStatus& open_limit);
     bool waitForTargetCount(const GripperInitializeConfig& config,
                             int32_t target_count,
                             RealtimeStatus& out_status);

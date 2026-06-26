@@ -298,6 +298,7 @@ void test_device_profile_and_initialize_with_mock_transport()
         Idle,
         OpenSearch,
         AfterZero,
+        ReleasingOpenLimit,
         CloseSearch,
         Centering
     };
@@ -359,6 +360,15 @@ void test_device_profile_and_initialize_with_mock_transport()
                                                       0,
                                                       0));
                 }
+                else if (phase == HomingPhase::ReleasingOpenLimit)
+                {
+                    io.enqueueRaw(makeRealtimeResponse(request.sequence,
+                                                      request.device,
+                                                      cmd,
+                                                      -100,
+                                                      0,
+                                                      0));
+                }
                 else if (phase == HomingPhase::CloseSearch)
                 {
                     io.enqueueRaw(makeRealtimeResponse(request.sequence,
@@ -409,7 +419,18 @@ void test_device_profile_and_initialize_with_mock_transport()
             }
 
             case Command::MoveRelative:
-                throw TestFailure("two-limit homing should not use relative backoff");
+            {
+                const int32_t delta_count = gripper::protocol::readI32LE(request.payload.data());
+                expectTrue(delta_count < 0, "homing should release open limit toward closing");
+                phase = HomingPhase::ReleasingOpenLimit;
+                io.enqueueRaw(makeRealtimeResponse(request.sequence,
+                                                  request.device,
+                                                  cmd,
+                                                  -100,
+                                                  0,
+                                                  0));
+                break;
+            }
 
             case Command::MoveAbsolute:
                 last_move_absolute_target = gripper::protocol::readI32LE(request.payload.data());
@@ -441,7 +462,6 @@ void test_device_profile_and_initialize_with_mock_transport()
     expectTrue(device.isInitialized(), "device should be initialized");
     expectTrue(result.limit_detected, "limit should be detected");
     expectTrue(result.zero_set, "zero should be set");
-    expectTrue(!result.backoff_done, "two-limit homing should not use backoff");
     expectEqual(result.mechanical_offset, static_cast<uint16_t>(0x1234), "mechanical offset mismatch");
     expectEqual(write_speed_count, 2, "homing should search both limits");
     expectEqual(last_move_absolute_target, -500, "homing should stop at measured midpoint");

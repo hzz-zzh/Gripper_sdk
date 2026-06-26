@@ -107,6 +107,7 @@ gripper_error_code_t map_error_to_code(const std::string& err)
     if (err == "read timeout" ||
         err == "initialize timeout" ||
         err == "opening limit search timeout" ||
+        err == "opening limit release timeout" ||
         err == "closing limit search timeout" ||
         err == "center move timeout")
     {
