@@ -26,6 +26,7 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kDegPerCount = 360.0 / kTotalCountPerTurbineRev;
 constexpr double kAlphaMinDeg = 0.0;
 constexpr double kAlphaMaxDeg = kAlphaBreakDeg + kAlphaOffsetDeg;
+constexpr double kSoftwareMaxOpeningMm = 105.0;
 
 inline double degToRad(double deg)
 {
@@ -55,6 +56,11 @@ inline double maxOpeningFromFormula()
     return 2.0 * kLinkLengthMm *
            (std::sin(degToRad(kAlphaBreakDeg)) +
             std::sin(degToRad(kAlphaOffsetDeg)));
+}
+
+inline double openingFormulaScale()
+{
+    return kSoftwareMaxOpeningMm / maxOpeningFromFormula();
 }
 
 inline bool baudrateToCode(int baudrate, Rs485BaudrateCode& code)
@@ -910,7 +916,7 @@ float GripperDevice::minOpeningMm() const
 
 float GripperDevice::maxOpeningMm() const
 {
-    return static_cast<float>(maxOpeningFromFormula());
+    return static_cast<float>(kSoftwareMaxOpeningMm);
 }
 
 double GripperDevice::countToTurbineAngleDeg(int32_t count) const
@@ -922,9 +928,11 @@ double GripperDevice::turbineAngleDegToOpeningMm(double alpha_deg) const
 {
     const double alpha = std::clamp(alpha_deg, kAlphaMinDeg, kAlphaMaxDeg);
 
-    return 2.0 * kLinkLengthMm *
-           (std::sin(degToRad(kAlphaBreakDeg - alpha)) +
-            std::sin(degToRad(kAlphaOffsetDeg)));
+    const double formula_opening =
+        2.0 * kLinkLengthMm *
+        (std::sin(degToRad(kAlphaBreakDeg - alpha)) +
+         std::sin(degToRad(kAlphaOffsetDeg)));
+    return formula_opening * openingFormulaScale();
 }
 
 float GripperDevice::countToOpeningMm(int32_t count) const
@@ -949,7 +957,9 @@ float GripperDevice::countToOpeningMm(int32_t count) const
 double GripperDevice::openingSpeedScaleMmPerSecPerRpm(double alpha_deg) const
 {
     const double alpha = std::clamp(alpha_deg, kAlphaMinDeg, kAlphaMaxDeg);
-    return (kPi / 6.0) * std::cos(degToRad(kAlphaBreakDeg - alpha));
+    return (kPi / 6.0) *
+           std::cos(degToRad(kAlphaBreakDeg - alpha)) *
+           openingFormulaScale();
 }
 
 float GripperDevice::motorRpmToOpeningSpeedMmS(float motor_speed_rpm, int32_t count) const
@@ -975,8 +985,8 @@ float GripperDevice::openingSpeedMmSToMotorRpmConservative(float opening_speed_m
         return 0.0f;
     }
 
-    constexpr double kMaxScale = kPi / 6.0;
-    return static_cast<float>(static_cast<double>(opening_speed_mm_s) / kMaxScale);
+    const double max_scale = (kPi / 6.0) * openingFormulaScale();
+    return static_cast<float>(static_cast<double>(opening_speed_mm_s) / max_scale);
 }
 
 bool GripperDevice::openingMmToCount(float opening_mm, int32_t& out_count)
@@ -1002,7 +1012,8 @@ bool GripperDevice::openingMmToCount(float opening_mm, int32_t& out_count)
         return true;
     }
 
-    const double s = target_mm / (2.0 * kLinkLengthMm) -
+    const double formula_target_mm = target_mm / openingFormulaScale();
+    const double s = formula_target_mm / (2.0 * kLinkLengthMm) -
                      std::sin(degToRad(kAlphaOffsetDeg));
 
     const double alpha_deg =

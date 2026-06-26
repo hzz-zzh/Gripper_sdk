@@ -440,6 +440,7 @@ void test_device_profile_and_initialize_with_mock_transport()
 
     gripper::GripperDevice device(config, std::move(transport));
     expectTrue(device.connect(), "device connect failed");
+    expectEqual(static_cast<int>(device.maxOpeningMm()), 105, "max opening should be 105 mm");
 
     gripper::GripperInitializeConfig init_cfg;
     init_cfg.poll_interval_ms = 1;
@@ -455,6 +456,15 @@ void test_device_profile_and_initialize_with_mock_transport()
     expectEqual(result.mechanical_offset, static_cast<uint16_t>(0), "software zero should not report mechanical offset");
     expectEqual(write_speed_count, 3, "homing should open, release, then close by speed");
     expectEqual(last_move_absolute_target, -450, "homing should stop at measured midpoint");
+
+    expectTrue(device.open(), "open command should succeed after initialization");
+    expectEqual(last_move_absolute_target, 100, "open should use measured open limit");
+
+    expectTrue(device.close(), "close command should succeed after initialization");
+    expectEqual(last_move_absolute_target, -1000, "close should use measured close limit");
+
+    expectTrue(device.moveToOpeningMm(52.5f), "mid opening command should succeed after initialization");
+    expectEqual(last_move_absolute_target, -450, "52.5 mm should map to measured midpoint");
 }
 
 } // namespace
