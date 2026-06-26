@@ -286,14 +286,23 @@ void test_device_profile_and_initialize_with_mock_transport()
 {
     gripper::GripperDeviceConfig config;
     config.device_address = 0x01;
-    config.position_profile.open_position_count = -1000;
-    config.position_profile.close_position_count = 200;
 
     auto transport = std::make_unique<ScriptedTransport>();
     auto* transport_ptr = transport.get();
 
-    int realtime_read_count = 0;
     int32_t last_move_absolute_target = 0;
+    int write_speed_count = 0;
+
+    enum class HomingPhase
+    {
+        Idle,
+        OpenSearch,
+        AfterZero,
+        CloseSearch,
+        Centering
+    };
+
+    HomingPhase phase = HomingPhase::Idle;
 
     transport_ptr->setHandler([&](const Frame& request, ScriptedTransport& io) {
         const auto cmd = static_cast<Command>(request.command);
@@ -304,17 +313,35 @@ void test_device_profile_and_initialize_with_mock_transport()
                 break;
 
             case Command::WriteSpeed:
+            {
+                const int32_t speed_raw = gripper::protocol::readI32LE(request.payload.data());
+                ++write_speed_count;
+                if (write_speed_count == 1)
+                {
+                    expectTrue(speed_raw > 0, "first homing speed should open");
+                    phase = HomingPhase::OpenSearch;
+                }
+                else if (write_speed_count == 2)
+                {
+                    expectTrue(speed_raw < 0, "second homing speed should close");
+                    phase = HomingPhase::CloseSearch;
+                }
+                else
+                {
+                    throw TestFailure("unexpected extra speed command in homing test");
+                }
+
                 io.enqueueRaw(makeRealtimeResponse(request.sequence,
                                                   request.device,
                                                   cmd,
-                                                  100,
+                                                  0,
                                                   500,
                                                   100));
                 break;
+            }
 
             case Command::ReadRealtime:
-                ++realtime_read_count;
-                if (realtime_read_count <= 3)
+                if (phase == HomingPhase::OpenSearch)
                 {
                     io.enqueueRaw(makeRealtimeResponse(request.sequence,
                                                       request.device,
@@ -323,14 +350,36 @@ void test_device_profile_and_initialize_with_mock_transport()
                                                       0,
                                                       1200));
                 }
-                else
+                else if (phase == HomingPhase::AfterZero)
                 {
                     io.enqueueRaw(makeRealtimeResponse(request.sequence,
                                                       request.device,
                                                       cmd,
-                                                      -100,
+                                                      0,
                                                       0,
                                                       0));
+                }
+                else if (phase == HomingPhase::CloseSearch)
+                {
+                    io.enqueueRaw(makeRealtimeResponse(request.sequence,
+                                                      request.device,
+                                                      cmd,
+                                                      -1000,
+                                                      0,
+                                                      1200));
+                }
+                else if (phase == HomingPhase::Centering)
+                {
+                    io.enqueueRaw(makeRealtimeResponse(request.sequence,
+                                                      request.device,
+                                                      cmd,
+                                                      -500,
+                                                      0,
+                                                      0));
+                }
+                else
+                {
+                    throw TestFailure("unexpected realtime read in homing test");
                 }
                 break;
 
@@ -355,20 +404,16 @@ void test_device_profile_and_initialize_with_mock_transport()
                 std::vector<uint8_t> payload;
                 gripper::protocol::appendU16LE(payload, 0x1234);
                 io.enqueueFrame(request.sequence, request.device, cmd, payload);
+                phase = HomingPhase::AfterZero;
                 break;
             }
 
             case Command::MoveRelative:
-                io.enqueueRaw(makeRealtimeResponse(request.sequence,
-                                                  request.device,
-                                                  cmd,
-                                                  -100,
-                                                  0,
-                                                  0));
-                break;
+                throw TestFailure("two-limit homing should not use relative backoff");
 
             case Command::MoveAbsolute:
                 last_move_absolute_target = gripper::protocol::readI32LE(request.payload.data());
+                phase = HomingPhase::Centering;
                 io.enqueueRaw(makeRealtimeResponse(request.sequence,
                                                   request.device,
                                                   cmd,
@@ -385,31 +430,21 @@ void test_device_profile_and_initialize_with_mock_transport()
     gripper::GripperDevice device(config, std::move(transport));
     expectTrue(device.connect(), "device connect failed");
 
-    expectEqual(device.percentToCount(0.0f), 200, "0 percent should map to close count");
-    expectEqual(device.percentToCount(100.0f), -1000, "100 percent should map to open count");
-    expectEqual(device.percentToCount(25.0f), -100, "25 percent mapping mismatch");
-    expectEqual(static_cast<int>(device.countToPercent(-100)), 25, "countToPercent mismatch");
-
     gripper::GripperInitializeConfig init_cfg;
     init_cfg.poll_interval_ms = 1;
     init_cfg.timeout_ms = 100;
     init_cfg.detect_consecutive_samples = 3;
-    init_cfg.backoff_count_after_zero = 100;
+    init_cfg.search_direction = +1;
 
     gripper::GripperInitializeResult result{};
     expectTrue(device.initialize(init_cfg, &result), "initialize should succeed with mock transport");
     expectTrue(device.isInitialized(), "device should be initialized");
     expectTrue(result.limit_detected, "limit should be detected");
     expectTrue(result.zero_set, "zero should be set");
-    expectTrue(result.backoff_done, "backoff should be executed");
+    expectTrue(!result.backoff_done, "two-limit homing should not use backoff");
     expectEqual(result.mechanical_offset, static_cast<uint16_t>(0x1234), "mechanical offset mismatch");
-    expectEqual(result.final_status.multi_turn_count, -100, "final status count mismatch");
-
-    expectTrue(device.open(), "open command should succeed after initialization");
-    expectEqual(last_move_absolute_target, -1000, "open should use profile open count");
-
-    expectTrue(device.moveToPercent(25.0f), "moveToPercent should succeed after initialization");
-    expectEqual(last_move_absolute_target, -100, "moveToPercent should use profile mapping");
+    expectEqual(write_speed_count, 2, "homing should search both limits");
+    expectEqual(last_move_absolute_target, -500, "homing should stop at measured midpoint");
 }
 
 } // namespace

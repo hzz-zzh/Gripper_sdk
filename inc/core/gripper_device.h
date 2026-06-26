@@ -107,6 +107,17 @@ private:
     float openingSpeedMmSToMotorRpm(float opening_speed_mm_s, int32_t reference_count) const;
     float openingSpeedMmSToMotorRpmConservative(float opening_speed_mm_s) const;
 
+    bool searchLimitByStall(const GripperInitializeConfig& config,
+                            int search_direction,
+                            float search_speed_rpm,
+                            const char* fault_context,
+                            const char* timeout_error,
+                            RealtimeStatus& out_limit_status,
+                            int& out_detect_samples);
+    bool waitForTargetCount(const GripperInitializeConfig& config,
+                            int32_t target_count,
+                            RealtimeStatus& out_status);
+
     bool openingMmToCount(float opening_mm, int32_t& out_count);
     int32_t openingMmToBackoffDeltaCount(float delta_mm, int32_t reference_count) const;
     bool convertRealtimeToStatus(const RealtimeStatus& in, GripperStatus& out) const;

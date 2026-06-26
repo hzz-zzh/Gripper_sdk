@@ -269,8 +269,103 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
     const float search_speed_rpm =
         openingSpeedMmSToMotorRpmConservative(config.search_speed_mm_s);
 
+    RealtimeStatus open_limit_before_zero{};
+    int open_detect_samples = 0;
+    if (!searchLimitByStall(config,
+                            config.search_direction,
+                            search_speed_rpm,
+                            "fault occurred during opening limit search",
+                            "opening limit search timeout",
+                            open_limit_before_zero,
+                            open_detect_samples))
+    {
+        return false;
+    }
+
+    if (out != nullptr)
+    {
+        out->limit_detected = true;
+        out->detect_samples = open_detect_samples;
+        out->limit_opening_mm_before_zero =
+            countToOpeningMm(open_limit_before_zero.multi_turn_count);
+    }
+
+    RealtimeStatus open_limit = open_limit_before_zero;
+    uint16_t mechanical_offset = 0;
+    if (config.set_zero_after_detect)
+    {
+        if (!motor_.setCurrentPositionAsZero(mechanical_offset))
+        {
+            setLastErrorFromMotor();
+            return false;
+        }
+
+        if (out != nullptr)
+        {
+            out->zero_set = true;
+            out->mechanical_offset = mechanical_offset;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        if (!motor_.readRealtime(open_limit))
+        {
+            setLastErrorFromMotor();
+            return false;
+        }
+    }
+
+    RealtimeStatus close_limit{};
+    int close_detect_samples = 0;
+    if (!searchLimitByStall(config,
+                            -config.search_direction,
+                            search_speed_rpm,
+                            "fault occurred during closing limit search",
+                            "closing limit search timeout",
+                            close_limit,
+                            close_detect_samples))
+    {
+        return false;
+    }
+
+    const std::int64_t center_count_sum =
+        static_cast<std::int64_t>(open_limit.multi_turn_count) +
+        static_cast<std::int64_t>(close_limit.multi_turn_count);
+    const int32_t center_count = static_cast<int32_t>(center_count_sum / 2);
+
+    RealtimeStatus latest{};
+    if (!motor_.moveToCount(center_count, &latest))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    if (!waitForTargetCount(config, center_count, latest))
+    {
+        return false;
+    }
+
+    if (out != nullptr)
+    {
+        out->detect_samples = open_detect_samples + close_detect_samples;
+        convertRealtimeToStatus(latest, out->final_status);
+    }
+
+    initialized_ = true;
+    last_error_.clear();
+    return true;
+}
+
+bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
+                                       int search_direction,
+                                       float search_speed_rpm,
+                                       const char* fault_context,
+                                       const char* timeout_error,
+                                       RealtimeStatus& out_limit_status,
+                                       int& out_detect_samples)
+{
     const float cmd_speed_rpm =
-        static_cast<float>(config.search_direction) * search_speed_rpm;
+        static_cast<float>(search_direction) * search_speed_rpm;
 
     if (!motor_.setSpeed(cmd_speed_rpm, 0, nullptr))
     {
@@ -300,8 +395,7 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         if (latest.fault_code != 0)
         {
             motor_.motorOff(nullptr);
-            last_error_ = makeFaultContextError("fault occurred during initialize",
-                                                latest.fault_code);
+            last_error_ = makeFaultContextError(fault_context, latest.fault_code);
             return false;
         }
 
@@ -335,107 +429,70 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
 
         if (consecutive_hits >= config.detect_consecutive_samples)
         {
-            if (out != nullptr)
-            {
-                out->limit_detected = true;
-                out->detect_samples = consecutive_hits;
-                out->limit_opening_mm_before_zero = countToOpeningMm(latest.multi_turn_count);
-            }
-
-            uint16_t mechanical_offset = 0;
-            if (config.set_zero_after_detect)
-            {
-                if (!motor_.setCurrentPositionAsZero(mechanical_offset))
-                {
-                    setLastErrorFromMotor();
-                    return false;
-                }
-
-                if (out != nullptr)
-                {
-                    out->zero_set = true;
-                    out->mechanical_offset = mechanical_offset;
-                }
-
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            }
-
-            if (config.backoff_after_zero_mm > 0.0f)
-            {
-                const int32_t backoff_count_mag =
-                    openingMmToBackoffDeltaCount(config.backoff_after_zero_mm, 0);
-                const int32_t backoff_delta = -config.search_direction * backoff_count_mag;
-
-                RealtimeStatus before_backoff{};
-                if (!motor_.readRealtime(before_backoff))
-                {
-                    setLastErrorFromMotor();
-                    return false;
-                }
-
-                if (!motor_.moveByCount(backoff_delta, &latest))
-                {
-                    setLastErrorFromMotor();
-                    return false;
-                }
-
-                const auto backoff_deadline =
-                    std::chrono::steady_clock::now() + std::chrono::milliseconds(800);
-
-                bool backoff_started = false;
-                while (std::chrono::steady_clock::now() < backoff_deadline)
-                {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-
-                    RealtimeStatus now{};
-                    if (!motor_.readRealtime(now))
-                    {
-                        setLastErrorFromMotor();
-                        return false;
-                    }
-
-                    latest = now;
-
-                    if (latest.fault_code != 0)
-                    {
-                        last_error_ = makeFaultContextError("fault occurred during homing backoff",
-                                                            latest.fault_code);
-                        return false;
-                    }
-
-                    if (std::abs(now.multi_turn_count - before_backoff.multi_turn_count) > 50)
-                    {
-                        backoff_started = true;
-                        break;
-                    }
-                }
-
-                if (out != nullptr && backoff_started)
-                {
-                    out->backoff_done = true;
-                }
-            }
-
-            if (!motor_.readRealtime(latest))
-            {
-                setLastErrorFromMotor();
-                return false;
-            }
-
-            if (out != nullptr)
-            {
-                convertRealtimeToStatus(latest, out->final_status);
-            }
-
-            initialized_ = true;
-            last_error_.clear();
+            out_limit_status = latest;
+            out_detect_samples = consecutive_hits;
             return true;
         }
     }
 
     motor_.motorOff(nullptr);
-    last_error_ = "initialize timeout";
+    last_error_ = timeout_error;
     return false;
+}
+
+bool GripperDevice::waitForTargetCount(const GripperInitializeConfig& config,
+                                       int32_t target_count,
+                                       RealtimeStatus& out_status)
+{
+    const int32_t tolerance_count =
+        std::max<int32_t>(10,
+                          openingMmToBackoffDeltaCount(
+                              std::max(config.position_epsilon_mm, 0.01f),
+                              target_count));
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(config.timeout_ms);
+
+    while (true)
+    {
+        if (out_status.fault_code != 0)
+        {
+            motor_.motorOff(nullptr);
+            last_error_ = makeFaultContextError("fault occurred during centering",
+                                                out_status.fault_code);
+            return false;
+        }
+
+        const float opening_speed_mm_s =
+            motorRpmToOpeningSpeedMmS(out_status.speed_rpm, out_status.multi_turn_count);
+        const std::int64_t count_delta =
+            static_cast<std::int64_t>(out_status.multi_turn_count) -
+            static_cast<std::int64_t>(target_count);
+        const std::int64_t count_error =
+            (count_delta < 0) ? -count_delta : count_delta;
+
+        if (count_error <= tolerance_count &&
+            std::abs(opening_speed_mm_s) <= config.speed_epsilon_mm_s)
+        {
+            return true;
+        }
+
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            motor_.motorOff(nullptr);
+            last_error_ = "center move timeout";
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(config.poll_interval_ms));
+
+        if (!motor_.readRealtime(out_status))
+        {
+            setLastErrorFromMotor();
+            motor_.motorOff(nullptr);
+            return false;
+        }
+    }
 }
 
 bool GripperDevice::moveToOpeningMm(float target_opening_mm, GripperStatus* out)

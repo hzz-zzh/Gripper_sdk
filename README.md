@@ -12,8 +12,9 @@ SDK 当前提供以下主要接口：
 - 打开夹爪
 - 关闭夹爪
 - 停止夹爪
-- 按目标位置控制
-- 按百分比控制夹爪开合
+- 按目标开口控制
+- 按速度和电流限制控制夹爪开合
+- 读取夹爪状态和故障信息
 
 主要 C API：
 
@@ -25,9 +26,9 @@ SDK 当前提供以下主要接口：
 - `gripper_open`
 - `gripper_close`
 - `gripper_stop`
-- `gripper_move_to_position`
-- `gripper_move_to_position_with_limits`
-- `gripper_move_to_percent`
+- `gripper_move_to_opening_mm`
+- `gripper_move_to_opening_mm_with_limits`
+- `gripper_read_status`
 - `gripper_get_last_error`
 
 ## 2. 平台说明
@@ -52,5 +53,13 @@ GRIPPER_SDK/
 │   └── transport/
 ├── examples/
 ├── cmake/
+├── docs/
 ├── CMakeLists.txt
 └── README.md
+```
+
+## 4. 文档
+
+- [夹爪产品手册](docs/product_manual.md)
+- [RS485 通讯协议](docs/protocol.md)
+- [错误码详细说明](docs/error_code.md)
