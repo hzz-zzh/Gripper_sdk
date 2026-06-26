@@ -98,6 +98,8 @@ public:
     float maxOpeningMm() const;
 
 private:
+    void invalidateCalibration();
+
     double countToTurbineAngleDeg(int32_t count) const;
     double turbineAngleDegToOpeningMm(double alpha_deg) const;
     float countToOpeningMm(int32_t count) const;
@@ -133,6 +135,9 @@ private:
     Gripper motor_;
     std::string last_error_;
     bool initialized_;
+    bool calibrated_limits_valid_;
+    int32_t open_limit_count_;
+    int32_t close_limit_count_;
 };
 }
 

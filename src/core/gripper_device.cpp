@@ -182,7 +182,10 @@ GripperDevice::GripperDevice(const GripperDeviceConfig& config)
     : config_(config),
       motor_(config.device_address),
       last_error_(),
-      initialized_(false)
+      initialized_(false),
+      calibrated_limits_valid_(false),
+      open_limit_count_(0),
+      close_limit_count_(0)
 {
     motor_.setTimeoutMs(config_.timeout_ms);
 }
@@ -192,7 +195,10 @@ GripperDevice::GripperDevice(const GripperDeviceConfig& config,
     : config_(config),
       motor_(config.device_address, std::move(transport)),
       last_error_(),
-      initialized_(false)
+      initialized_(false),
+      calibrated_limits_valid_(false),
+      open_limit_count_(0),
+      close_limit_count_(0)
 {
     motor_.setTimeoutMs(config_.timeout_ms);
 }
@@ -205,7 +211,7 @@ bool GripperDevice::connect()
         return false;
     }
 
-    initialized_ = false;
+    invalidateCalibration();
     last_error_.clear();
     return true;
 }
@@ -213,7 +219,7 @@ bool GripperDevice::connect()
 void GripperDevice::disconnect()
 {
     motor_.disconnect();
-    initialized_ = false;
+    invalidateCalibration();
 }
 
 bool GripperDevice::isConnected() const
@@ -228,7 +234,7 @@ bool GripperDevice::isInitialized() const
 
 void GripperDevice::invalidateInitialization()
 {
-    initialized_ = false;
+    invalidateCalibration();
 }
 
 const std::string& GripperDevice::lastError() const
@@ -287,7 +293,7 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         return false;
     }
 
-    initialized_ = false;
+    invalidateCalibration();
 
     if (out != nullptr)
     {
@@ -338,31 +344,11 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
             countToOpeningMm(open_limit_before_zero.multi_turn_count);
     }
 
-    RealtimeStatus open_limit = open_limit_before_zero;
-    uint16_t mechanical_offset = 0;
-    if (config.set_zero_after_detect)
+    const RealtimeStatus open_limit = open_limit_before_zero;
+    if (out != nullptr && config.set_zero_after_detect)
     {
-        if (!motor_.setCurrentPositionAsZero(mechanical_offset))
-        {
-            setLastErrorFromMotor();
-            return false;
-        }
-
-        if (out != nullptr)
-        {
-            out->zero_set = true;
-            out->mechanical_offset = mechanical_offset;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-        if (!motor_.readRealtime(open_limit))
-        {
-            setLastErrorFromMotor();
-            return false;
-        }
-
-        homingDebugStatus("open limit after zero", open_limit);
+        out->zero_set = true;
+        out->mechanical_offset = 0;
     }
 
     if (!releaseOpeningLimit(config, config.search_direction, search_speed_rpm, open_limit))
@@ -384,6 +370,16 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
     }
 
     homingDebugStatus("close limit", close_limit);
+
+    open_limit_count_ = open_limit.multi_turn_count;
+    close_limit_count_ = close_limit.multi_turn_count;
+    calibrated_limits_valid_ = (open_limit_count_ != close_limit_count_);
+
+    if (!calibrated_limits_valid_)
+    {
+        last_error_ = "invalid homing limits: open and close counts are equal";
+        return false;
+    }
 
     const std::int64_t center_count_sum =
         static_cast<std::int64_t>(open_limit.multi_turn_count) +
@@ -822,7 +818,7 @@ bool GripperDevice::reboot()
         return false;
     }
 
-    initialized_ = false;
+    invalidateCalibration();
     last_error_.clear();
     return true;
 }
@@ -884,7 +880,7 @@ bool GripperDevice::setCommunicationConfig(uint8_t new_device_address, int new_b
             config_.device_address = new_device_address;
             config_.baudrate = new_baudrate;
             motor_.setDeviceAddress(new_device_address);
-            initialized_ = false;
+            invalidateCalibration();
             last_error_ = kCommConfigMayHaveAppliedMessage();
         }
 
@@ -894,9 +890,17 @@ bool GripperDevice::setCommunicationConfig(uint8_t new_device_address, int new_b
     config_.device_address = new_device_address;
     config_.baudrate = new_baudrate;
     motor_.setDeviceAddress(new_device_address);
-    initialized_ = false;
+    invalidateCalibration();
     last_error_.clear();
     return true;
+}
+
+void GripperDevice::invalidateCalibration()
+{
+    initialized_ = false;
+    calibrated_limits_valid_ = false;
+    open_limit_count_ = 0;
+    close_limit_count_ = 0;
 }
 
 float GripperDevice::minOpeningMm() const
@@ -925,6 +929,17 @@ double GripperDevice::turbineAngleDegToOpeningMm(double alpha_deg) const
 
 float GripperDevice::countToOpeningMm(int32_t count) const
 {
+    if (calibrated_limits_valid_)
+    {
+        const double opening_ratio =
+            (static_cast<double>(count) - static_cast<double>(close_limit_count_)) /
+            (static_cast<double>(open_limit_count_) - static_cast<double>(close_limit_count_));
+        const double opening =
+            std::clamp(opening_ratio, 0.0, 1.0) *
+            static_cast<double>(maxOpeningMm());
+        return static_cast<float>(opening);
+    }
+
     const double opening = turbineAngleDegToOpeningMm(countToTurbineAngleDeg(count));
     return static_cast<float>(std::clamp(opening,
                                          static_cast<double>(minOpeningMm()),
@@ -974,6 +989,17 @@ bool GripperDevice::openingMmToCount(float opening_mm, int32_t& out_count)
     {
         last_error_ = "target opening_mm is outside the valid geometry range";
         return false;
+    }
+
+    if (calibrated_limits_valid_)
+    {
+        const double ratio = (target_mm - min_mm) / (max_mm - min_mm);
+        const double target_count =
+            static_cast<double>(close_limit_count_) +
+            ratio * static_cast<double>(open_limit_count_ - close_limit_count_);
+        out_count = static_cast<int32_t>(std::lround(target_count));
+        last_error_.clear();
+        return true;
     }
 
     const double s = target_mm / (2.0 * kLinkLengthMm) -

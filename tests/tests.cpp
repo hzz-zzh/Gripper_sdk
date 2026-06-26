@@ -417,13 +417,7 @@ void test_device_profile_and_initialize_with_mock_transport()
                 break;
 
             case Command::SetZeroPoint:
-            {
-                std::vector<uint8_t> payload;
-                gripper::protocol::appendU16LE(payload, 0x1234);
-                io.enqueueFrame(request.sequence, request.device, cmd, payload);
-                phase = HomingPhase::AfterZero;
-                break;
-            }
+                throw TestFailure("two-limit homing should use software zero, not SetZeroPoint");
 
             case Command::MoveRelative:
                 throw TestFailure("two-limit homing should release by speed, not relative position");
@@ -458,9 +452,9 @@ void test_device_profile_and_initialize_with_mock_transport()
     expectTrue(device.isInitialized(), "device should be initialized");
     expectTrue(result.limit_detected, "limit should be detected");
     expectTrue(result.zero_set, "zero should be set");
-    expectEqual(result.mechanical_offset, static_cast<uint16_t>(0x1234), "mechanical offset mismatch");
+    expectEqual(result.mechanical_offset, static_cast<uint16_t>(0), "software zero should not report mechanical offset");
     expectEqual(write_speed_count, 3, "homing should open, release, then close by speed");
-    expectEqual(last_move_absolute_target, -500, "homing should stop at measured midpoint");
+    expectEqual(last_move_absolute_target, -450, "homing should stop at measured midpoint");
 }
 
 } // namespace
