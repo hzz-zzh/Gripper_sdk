@@ -365,7 +365,7 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         homingDebugStatus("open limit after zero", open_limit);
     }
 
-    if (!releaseOpeningLimit(config, config.search_direction, open_limit))
+    if (!releaseOpeningLimit(config, config.search_direction, search_speed_rpm, open_limit))
     {
         return false;
     }
@@ -556,39 +556,31 @@ bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
 
 bool GripperDevice::releaseOpeningLimit(const GripperInitializeConfig& config,
                                         int search_direction,
+                                        float search_speed_rpm,
                                         const RealtimeStatus& open_limit)
 {
     const float release_mm = std::max(config.backoff_after_zero_mm, 1.0f);
     const int32_t release_count =
         openingMmToBackoffDeltaCount(release_mm, open_limit.multi_turn_count);
-    const int32_t release_delta = -search_direction * release_count;
     const int32_t min_started_delta = std::min<int32_t>(release_count, 50);
+    const float release_speed_rpm =
+        -static_cast<float>(search_direction) * search_speed_rpm;
 
-    homingDebugLog("release opening limit release_mm=%.3f open_count=%ld release_count=%ld release_delta=%ld min_started_delta=%ld",
+    homingDebugLog("release opening limit release_mm=%.3f open_count=%ld release_count=%ld release_speed_rpm=%.3f min_started_delta=%ld",
                    static_cast<double>(release_mm),
                    static_cast<long>(open_limit.multi_turn_count),
                    static_cast<long>(release_count),
-                   static_cast<long>(release_delta),
+                   static_cast<double>(release_speed_rpm),
                    static_cast<long>(min_started_delta));
 
-    RealtimeStatus stopped{};
-    if (!motor_.setSpeed(0.0f, 0, &stopped))
-    {
-        setLastErrorFromMotor();
-        return false;
-    }
-
-    homingDebugStatus("release stop-speed response", stopped);
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
     RealtimeStatus latest{};
-    if (!motor_.moveByCount(release_delta, &latest))
+    if (!motor_.setSpeed(release_speed_rpm, 0, &latest))
     {
         setLastErrorFromMotor();
         return false;
     }
 
-    homingDebugStatus("release move response", latest);
+    homingDebugStatus("release speed response", latest);
 
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(config.timeout_ms);

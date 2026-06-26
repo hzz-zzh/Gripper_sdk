@@ -116,6 +116,7 @@ private:
                             int& out_detect_samples);
     bool releaseOpeningLimit(const GripperInitializeConfig& config,
                              int search_direction,
+                             float search_speed_rpm,
                              const RealtimeStatus& open_limit);
     bool waitForTargetCount(const GripperInitializeConfig& config,
                             int32_t target_count,

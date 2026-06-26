@@ -316,28 +316,27 @@ void test_device_profile_and_initialize_with_mock_transport()
             case Command::WriteSpeed:
             {
                 const int32_t speed_raw = gripper::protocol::readI32LE(request.payload.data());
-                if (speed_raw == 0)
+                expectTrue(speed_raw != 0, "homing should use nonzero speed commands");
+
+                ++write_speed_count;
+                if (write_speed_count == 1)
                 {
-                    expectTrue(phase == HomingPhase::AfterZero,
-                               "zero speed should be used before release");
+                    expectTrue(speed_raw > 0, "first homing speed should open");
+                    phase = HomingPhase::OpenSearch;
+                }
+                else if (write_speed_count == 2)
+                {
+                    expectTrue(speed_raw < 0, "second homing speed should release toward closing");
+                    phase = HomingPhase::ReleasingOpenLimit;
+                }
+                else if (write_speed_count == 3)
+                {
+                    expectTrue(speed_raw < 0, "third homing speed should close");
+                    phase = HomingPhase::CloseSearch;
                 }
                 else
                 {
-                    ++write_speed_count;
-                    if (write_speed_count == 1)
-                    {
-                        expectTrue(speed_raw > 0, "first homing speed should open");
-                        phase = HomingPhase::OpenSearch;
-                    }
-                    else if (write_speed_count == 2)
-                    {
-                        expectTrue(speed_raw < 0, "second homing speed should close");
-                        phase = HomingPhase::CloseSearch;
-                    }
-                    else
-                    {
-                        throw TestFailure("unexpected extra speed command in homing test");
-                    }
+                    throw TestFailure("unexpected extra speed command in homing test");
                 }
 
                 io.enqueueRaw(makeRealtimeResponse(request.sequence,
@@ -427,18 +426,7 @@ void test_device_profile_and_initialize_with_mock_transport()
             }
 
             case Command::MoveRelative:
-            {
-                const int32_t delta_count = gripper::protocol::readI32LE(request.payload.data());
-                expectTrue(delta_count < 0, "homing should release open limit toward closing");
-                phase = HomingPhase::ReleasingOpenLimit;
-                io.enqueueRaw(makeRealtimeResponse(request.sequence,
-                                                  request.device,
-                                                  cmd,
-                                                  -100,
-                                                  0,
-                                                  0));
-                break;
-            }
+                throw TestFailure("two-limit homing should release by speed, not relative position");
 
             case Command::MoveAbsolute:
                 last_move_absolute_target = gripper::protocol::readI32LE(request.payload.data());
@@ -471,7 +459,7 @@ void test_device_profile_and_initialize_with_mock_transport()
     expectTrue(result.limit_detected, "limit should be detected");
     expectTrue(result.zero_set, "zero should be set");
     expectEqual(result.mechanical_offset, static_cast<uint16_t>(0x1234), "mechanical offset mismatch");
-    expectEqual(write_speed_count, 2, "homing should search both limits");
+    expectEqual(write_speed_count, 3, "homing should open, release, then close by speed");
     expectEqual(last_move_absolute_target, -500, "homing should stop at measured midpoint");
 }
 
