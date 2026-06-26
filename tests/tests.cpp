@@ -316,20 +316,28 @@ void test_device_profile_and_initialize_with_mock_transport()
             case Command::WriteSpeed:
             {
                 const int32_t speed_raw = gripper::protocol::readI32LE(request.payload.data());
-                ++write_speed_count;
-                if (write_speed_count == 1)
+                if (speed_raw == 0)
                 {
-                    expectTrue(speed_raw > 0, "first homing speed should open");
-                    phase = HomingPhase::OpenSearch;
-                }
-                else if (write_speed_count == 2)
-                {
-                    expectTrue(speed_raw < 0, "second homing speed should close");
-                    phase = HomingPhase::CloseSearch;
+                    expectTrue(phase == HomingPhase::AfterZero,
+                               "zero speed should be used before release");
                 }
                 else
                 {
-                    throw TestFailure("unexpected extra speed command in homing test");
+                    ++write_speed_count;
+                    if (write_speed_count == 1)
+                    {
+                        expectTrue(speed_raw > 0, "first homing speed should open");
+                        phase = HomingPhase::OpenSearch;
+                    }
+                    else if (write_speed_count == 2)
+                    {
+                        expectTrue(speed_raw < 0, "second homing speed should close");
+                        phase = HomingPhase::CloseSearch;
+                    }
+                    else
+                    {
+                        throw TestFailure("unexpected extra speed command in homing test");
+                    }
                 }
 
                 io.enqueueRaw(makeRealtimeResponse(request.sequence,

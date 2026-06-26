@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <thread>
 #include <utility>
@@ -132,6 +135,41 @@ inline std::string faultCodeToText(uint8_t fault_code)
 inline std::string makeFaultContextError(const char* context, uint8_t fault_code)
 {
     return std::string(context) + ": " + faultCodeToText(fault_code);
+}
+
+inline bool homingDebugEnabled()
+{
+    const char* value = std::getenv("GRIPPER_HOMING_DEBUG");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+void homingDebugLog(const char* format, ...)
+{
+    if (!homingDebugEnabled())
+    {
+        return;
+    }
+
+    std::fprintf(stderr, "[gripper homing] ");
+
+    va_list args;
+    va_start(args, format);
+    std::vfprintf(stderr, format, args);
+    va_end(args);
+
+    std::fprintf(stderr, "\n");
+}
+
+void homingDebugStatus(const char* label, const RealtimeStatus& status)
+{
+    homingDebugLog("%s count=%ld speed_rpm=%.3f q_current=%.3f fault=0x%02X run_state=%u enabled=%d",
+                   label,
+                   static_cast<long>(status.multi_turn_count),
+                   static_cast<double>(status.speed_rpm),
+                   static_cast<double>(status.q_current_amp),
+                   static_cast<unsigned>(status.fault_code),
+                   static_cast<unsigned>(status.run_state),
+                   status.motor_enabled ? 1 : 0);
 }
 
 inline const char* kCommConfigMayHaveAppliedMessage()
@@ -269,6 +307,14 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
     const float search_speed_rpm =
         openingSpeedMmSToMotorRpmConservative(config.search_speed_mm_s);
 
+    homingDebugLog("start search_direction=%d search_speed_mm_s=%.3f search_speed_rpm=%.3f timeout_ms=%d current_threshold=%.3f backoff_mm=%.3f",
+                   config.search_direction,
+                   static_cast<double>(config.search_speed_mm_s),
+                   static_cast<double>(search_speed_rpm),
+                   config.timeout_ms,
+                   static_cast<double>(config.current_threshold_a),
+                   static_cast<double>(config.backoff_after_zero_mm));
+
     RealtimeStatus open_limit_before_zero{};
     int open_detect_samples = 0;
     if (!searchLimitByStall(config,
@@ -281,6 +327,8 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
     {
         return false;
     }
+
+    homingDebugStatus("open limit before zero", open_limit_before_zero);
 
     if (out != nullptr)
     {
@@ -313,6 +361,8 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
             setLastErrorFromMotor();
             return false;
         }
+
+        homingDebugStatus("open limit after zero", open_limit);
     }
 
     if (!releaseOpeningLimit(config, config.search_direction, open_limit))
@@ -333,10 +383,17 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         return false;
     }
 
+    homingDebugStatus("close limit", close_limit);
+
     const std::int64_t center_count_sum =
         static_cast<std::int64_t>(open_limit.multi_turn_count) +
         static_cast<std::int64_t>(close_limit.multi_turn_count);
     const int32_t center_count = static_cast<int32_t>(center_count_sum / 2);
+
+    homingDebugLog("center target open_count=%ld close_count=%ld center_count=%ld",
+                   static_cast<long>(open_limit.multi_turn_count),
+                   static_cast<long>(close_limit.multi_turn_count),
+                   static_cast<long>(center_count));
 
     RealtimeStatus latest{};
     if (!motor_.moveToCount(center_count, &latest))
@@ -345,10 +402,14 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         return false;
     }
 
+    homingDebugStatus("center move response", latest);
+
     if (!waitForTargetCount(config, center_count, latest))
     {
         return false;
     }
+
+    homingDebugStatus("center final", latest);
 
     if (out != nullptr)
     {
@@ -372,6 +433,10 @@ bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
     const float cmd_speed_rpm =
         static_cast<float>(search_direction) * search_speed_rpm;
 
+    homingDebugLog("search limit start direction=%d cmd_speed_rpm=%.3f",
+                   search_direction,
+                   static_cast<double>(cmd_speed_rpm));
+
     if (!motor_.setSpeed(cmd_speed_rpm, 0, nullptr))
     {
         setLastErrorFromMotor();
@@ -386,6 +451,7 @@ bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
     int32_t start_count = 0;
     RealtimeStatus prev_status{};
     int consecutive_hits = 0;
+    int sample_count = 0;
     RealtimeStatus latest{};
 
     while (std::chrono::steady_clock::now() < deadline)
@@ -429,8 +495,13 @@ bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
                                      (delta_opening_mm <= config.position_epsilon_mm);
         const int32_t min_travel_count =
             openingMmToBackoffDeltaCount(1.0f, start_count);
+        const std::int64_t moved_count_delta =
+            static_cast<std::int64_t>(latest.multi_turn_count) -
+            static_cast<std::int64_t>(start_count);
+        const std::int64_t moved_count =
+            (moved_count_delta < 0) ? -moved_count_delta : moved_count_delta;
         const bool moved_far_enough =
-            std::abs(latest.multi_turn_count - start_count) >= min_travel_count;
+            moved_count >= min_travel_count;
         const bool stalled_at_existing_limit =
             current_high && (speed_small || position_locked);
         const bool stalled_after_travel =
@@ -446,6 +517,26 @@ bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
             consecutive_hits = 0;
         }
 
+        ++sample_count;
+        if ((sample_count <= 5) ||
+            (sample_count % 10 == 0) ||
+            stalled_at_existing_limit ||
+            stalled_after_travel)
+        {
+            homingDebugLog("search sample direction=%d sample=%d count=%ld delta_mm=%.4f opening_speed=%.4f q_current=%.3f moved_count=%ld speed_small=%d current_high=%d position_locked=%d hits=%d",
+                           search_direction,
+                           sample_count,
+                           static_cast<long>(latest.multi_turn_count),
+                           static_cast<double>(delta_opening_mm),
+                           static_cast<double>(opening_speed_mm_s),
+                           static_cast<double>(latest.q_current_amp),
+                           static_cast<long>(moved_count_delta),
+                           speed_small ? 1 : 0,
+                           current_high ? 1 : 0,
+                           position_locked ? 1 : 0,
+                           consecutive_hits);
+        }
+
         prev_status = latest;
         has_prev_status = true;
 
@@ -453,6 +544,7 @@ bool GripperDevice::searchLimitByStall(const GripperInitializeConfig& config,
         {
             out_limit_status = latest;
             out_detect_samples = consecutive_hits;
+            homingDebugStatus("search limit detected", latest);
             return true;
         }
     }
@@ -472,6 +564,23 @@ bool GripperDevice::releaseOpeningLimit(const GripperInitializeConfig& config,
     const int32_t release_delta = -search_direction * release_count;
     const int32_t min_started_delta = std::min<int32_t>(release_count, 50);
 
+    homingDebugLog("release opening limit release_mm=%.3f open_count=%ld release_count=%ld release_delta=%ld min_started_delta=%ld",
+                   static_cast<double>(release_mm),
+                   static_cast<long>(open_limit.multi_turn_count),
+                   static_cast<long>(release_count),
+                   static_cast<long>(release_delta),
+                   static_cast<long>(min_started_delta));
+
+    RealtimeStatus stopped{};
+    if (!motor_.setSpeed(0.0f, 0, &stopped))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    homingDebugStatus("release stop-speed response", stopped);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
     RealtimeStatus latest{};
     if (!motor_.moveByCount(release_delta, &latest))
     {
@@ -479,9 +588,12 @@ bool GripperDevice::releaseOpeningLimit(const GripperInitializeConfig& config,
         return false;
     }
 
+    homingDebugStatus("release move response", latest);
+
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(config.timeout_ms);
 
+    int sample_count = 0;
     while (std::chrono::steady_clock::now() < deadline)
     {
         if (latest.fault_code != 0)
@@ -492,10 +604,29 @@ bool GripperDevice::releaseOpeningLimit(const GripperInitializeConfig& config,
             return false;
         }
 
-        const int32_t moved_count =
-            std::abs(latest.multi_turn_count - open_limit.multi_turn_count);
+        const std::int64_t moved_count_delta =
+            static_cast<std::int64_t>(latest.multi_turn_count) -
+            static_cast<std::int64_t>(open_limit.multi_turn_count);
+        const std::int64_t moved_count =
+            (moved_count_delta < 0) ? -moved_count_delta : moved_count_delta;
+        ++sample_count;
+        if (sample_count <= 5 || sample_count % 10 == 0)
+        {
+            homingDebugLog("release sample=%d count=%ld moved_delta=%ld moved_count=%ld speed_rpm=%.3f q_current=%.3f fault=0x%02X run_state=%u enabled=%d",
+                           sample_count,
+                           static_cast<long>(latest.multi_turn_count),
+                           static_cast<long>(moved_count_delta),
+                           static_cast<long>(moved_count),
+                           static_cast<double>(latest.speed_rpm),
+                           static_cast<double>(latest.q_current_amp),
+                           static_cast<unsigned>(latest.fault_code),
+                           static_cast<unsigned>(latest.run_state),
+                           latest.motor_enabled ? 1 : 0);
+        }
+
         if (moved_count >= min_started_delta)
         {
+            homingDebugStatus("release detected movement", latest);
             return true;
         }
 
