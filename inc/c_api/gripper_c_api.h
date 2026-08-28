@@ -33,6 +33,7 @@ typedef struct
 typedef struct
 {
     float search_speed_mm_s;
+    float current_limit_amp;
     int search_direction;
 
     int poll_interval_ms;
@@ -46,10 +47,13 @@ typedef struct
     int clear_fault_before_start;
     int set_zero_after_detect;
     float backoff_after_zero_mm;
+    float open_safety_margin_mm;
 } gripper_initialize_config_t;
 
 typedef struct
 {
+    float current_limit_amp_during_homing;
+
     int limit_detected;
     int zero_set;
     int backoff_done;

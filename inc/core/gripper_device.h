@@ -33,6 +33,7 @@ struct GripperStatus
 struct GripperInitializeConfig
 {
     float search_speed_mm_s = 50.0f;
+    float current_limit_amp = 2.0f;
     int search_direction = +1;
 
     int poll_interval_ms = 20;
@@ -47,10 +48,13 @@ struct GripperInitializeConfig
     bool set_zero_after_detect = true;
 
     float backoff_after_zero_mm = 5.0f;
+    float open_safety_margin_mm = 5.0f;
 };
 
 struct GripperInitializeResult
 {
+    float current_limit_amp_during_homing = 0.0f;
+
     bool limit_detected = false;
     bool zero_set = false;
     bool backoff_done = false;
@@ -137,6 +141,7 @@ private:
     bool initialized_;
     bool calibrated_limits_valid_;
     int32_t open_limit_count_;
+    int32_t safe_open_limit_count_;
     int32_t close_limit_count_;
 };
 }

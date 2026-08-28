@@ -1,6 +1,15 @@
 #include "c_api/gripper_c_api.h"
+#include <signal.h>
 #include <stdio.h>
 #include <unistd.h>
+
+static volatile sig_atomic_t stop_requested = 0;
+
+static void handle_stop_signal(int signal_number)
+{
+    (void)signal_number;
+    stop_requested = 1;
+}
 
 static void print_status(const gripper_status_t* st)
 {
@@ -43,6 +52,9 @@ static void print_api_error(gripper_handle_t* h, const char* action, int rc)
 
 int main(void)
 {
+    signal(SIGINT, handle_stop_signal);
+    signal(SIGTERM, handle_stop_signal);
+
     gripper_config_t cfg;
     cfg.port_name = "/dev/ttyACM0";
     cfg.baudrate = 115200;
@@ -87,28 +99,33 @@ int main(void)
     gripper_initialize_config_init(&hc);
 
     hc.search_speed_mm_s = 50.0f;
+    hc.current_limit_amp = 1.8f;
     hc.search_direction = +1;
     hc.poll_interval_ms = 20;
     hc.timeout_ms = 5000;
     hc.speed_epsilon_mm_s = 0.25f;
-    hc.current_threshold_a = 0.3f;
+    hc.current_threshold_a = 1.3f;
     hc.position_epsilon_mm = 0.05f;
     hc.detect_consecutive_samples = 4;
     hc.clear_fault_before_start = 1;
     hc.set_zero_after_detect = 1;
     hc.backoff_after_zero_mm = 2.0f;
+    hc.open_safety_margin_mm = 8.0f;
 
-    printf("start homing...\n");
+    printf("start homing with current limit %.3f A...\n", hc.current_limit_amp);
     rc = gripper_initialize(h, &hc, &hr);
     if (rc != GRIPPER_OK)
     {
         print_api_error(h, "homing", rc);
+        gripper_stop(h);
         gripper_disconnect(h);
         gripper_destroy(h);
         return 1;
     }
 
     printf("homing ok\n");
+    printf("  current_limit_during_homing  = %.3f A\n",
+           hr.current_limit_amp_during_homing);
     printf("  limit_detected               = %d\n", hr.limit_detected);
     printf("  zero_set                     = %d\n", hr.zero_set);
     printf("  backoff_done                 = %d\n", hr.backoff_done);
@@ -118,16 +135,21 @@ int main(void)
     printf("final status after homing:\n");
     print_status(&hr.final_status);
 
-    while (1)
+    while (!stop_requested)
     {
-        rc = gripper_move_to_opening_mm_with_limits(h, 0.0f, 170.0f, 0.5f);
+        rc = gripper_move_to_opening_mm_with_limits(h, 0.0f, 150.0f, 1.5f);
         if (rc != GRIPPER_OK)
         {
             print_api_error(h, "move to 0.0 mm", rc);
             break;
         }
 
-        usleep(800 * 1000);
+        usleep(1000 * 1000);
+        if (stop_requested)
+        {
+            break;
+        }
+
         gripper_status_t st;
         rc = gripper_read_status(h, &st);
         if (rc == GRIPPER_OK)
@@ -140,14 +162,18 @@ int main(void)
             break;
         }
 
-        rc = gripper_move_to_opening_mm_with_limits(h, 70.0f, 170.0f, 0.5f);
+        rc = gripper_move_to_opening_mm_with_limits(h, 105.0f, 150.0f, 1.5f);
         if (rc != GRIPPER_OK)
         {
-            print_api_error(h, "move to 60.0 mm", rc);
+            print_api_error(h, "move to 105.0 mm", rc);
             break;
         }
 
-        usleep(800 * 1000);
+        usleep(1000 * 1000);
+        if (stop_requested)
+        {
+            break;
+        }
 
         rc = gripper_read_status(h, &st);
         if (rc == GRIPPER_OK)
@@ -159,6 +185,11 @@ int main(void)
             print_api_error(h, "read_status in loop", rc);
             break;
         }
+    }
+
+    if (stop_requested)
+    {
+        printf("stop requested, disabling motor...\n");
     }
 
     rc = gripper_stop(h);

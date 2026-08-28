@@ -46,6 +46,7 @@ bool copy_initialize_result(const gripper::GripperInitializeResult& in,
         return false;
     }
 
+    out->current_limit_amp_during_homing = in.current_limit_amp_during_homing;
     out->limit_detected = in.limit_detected ? 1 : 0;
     out->zero_set = in.zero_set ? 1 : 0;
     out->backoff_done = in.backoff_done ? 1 : 0;
@@ -308,6 +309,7 @@ void gripper_initialize_config_init(gripper_initialize_config_t* config)
     }
 
     config->search_speed_mm_s = 50.0f;
+    config->current_limit_amp = 2.0f;
     config->search_direction = +1;
 
     config->poll_interval_ms = 20;
@@ -321,6 +323,7 @@ void gripper_initialize_config_init(gripper_initialize_config_t* config)
     config->clear_fault_before_start = 1;
     config->set_zero_after_detect = 1;
     config->backoff_after_zero_mm = 2.0f;
+    config->open_safety_margin_mm = 5.0f;
 }
 
 int gripper_initialize(gripper_handle_t* handle,
@@ -334,6 +337,7 @@ int gripper_initialize(gripper_handle_t* handle,
 
     gripper::GripperInitializeConfig cpp_config;
     cpp_config.search_speed_mm_s = config->search_speed_mm_s;
+    cpp_config.current_limit_amp = config->current_limit_amp;
     cpp_config.search_direction = config->search_direction;
     cpp_config.poll_interval_ms = config->poll_interval_ms;
     cpp_config.timeout_ms = config->timeout_ms;
@@ -344,6 +348,7 @@ int gripper_initialize(gripper_handle_t* handle,
     cpp_config.clear_fault_before_start = (config->clear_fault_before_start != 0);
     cpp_config.set_zero_after_detect = (config->set_zero_after_detect != 0);
     cpp_config.backoff_after_zero_mm = config->backoff_after_zero_mm;
+    cpp_config.open_safety_margin_mm = config->open_safety_margin_mm;
 
     gripper::GripperInitializeResult cpp_result{};
     if (!handle->device.initialize(cpp_config, &cpp_result))

@@ -4,6 +4,7 @@
 #include "transport/i_transport.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -292,6 +293,9 @@ void test_device_profile_and_initialize_with_mock_transport()
 
     int32_t last_move_absolute_target = 0;
     int write_speed_count = 0;
+    int read_motion_params_count = 0;
+    int write_motion_params_count = 0;
+    uint32_t current_limit_raw = 1500;
 
     enum class HomingPhase
     {
@@ -313,8 +317,36 @@ void test_device_profile_and_initialize_with_mock_transport()
                 io.enqueueFrame(request.sequence, request.device, cmd, {0x00});
                 break;
 
+            case Command::ReadMotionParams:
+            {
+                ++read_motion_params_count;
+                std::vector<uint8_t> payload;
+                gripper::protocol::appendFloatLE(payload, 1.0f);
+                gripper::protocol::appendFloatLE(payload, 2.0f);
+                gripper::protocol::appendU32LE(payload, 1000);
+                gripper::protocol::appendFloatLE(payload, 3.0f);
+                gripper::protocol::appendFloatLE(payload, 4.0f);
+                gripper::protocol::appendU32LE(payload, current_limit_raw);
+                io.enqueueFrame(request.sequence,
+                                request.device,
+                                cmd,
+                                payload);
+                break;
+            }
+
+            case Command::WriteMotionParamsTemp:
+                ++write_motion_params_count;
+                expectEqual(gripper::protocol::readU32LE(&request.payload[20]),
+                            static_cast<uint32_t>(2000),
+                            "homing should set the configured current limit before speed control");
+                current_limit_raw = gripper::protocol::readU32LE(&request.payload[20]);
+                io.enqueueFrame(request.sequence, request.device, cmd, request.payload);
+                break;
+
             case Command::WriteSpeed:
             {
+                expectEqual(write_motion_params_count, 1,
+                            "homing current limit must be set before speed control");
                 const int32_t speed_raw = gripper::protocol::readI32LE(request.payload.data());
                 expectTrue(speed_raw != 0, "homing should use nonzero speed commands");
 
@@ -452,19 +484,24 @@ void test_device_profile_and_initialize_with_mock_transport()
     expectTrue(device.initialize(init_cfg, &result), "initialize should succeed with mock transport");
     expectTrue(device.isInitialized(), "device should be initialized");
     expectTrue(result.limit_detected, "limit should be detected");
+    expectEqual(read_motion_params_count, 1,
+                "homing should read the original current limit once");
+    expectEqual(write_motion_params_count, 1, "homing should set current limit once before speed control");
+    expectTrue(std::abs(result.current_limit_amp_during_homing - 2.0f) < 1e-5f,
+               "unexpected current limit during homing");
     expectTrue(result.zero_set, "zero should be set");
     expectEqual(result.mechanical_offset, static_cast<uint16_t>(0), "software zero should not report mechanical offset");
     expectEqual(write_speed_count, 3, "homing should open, release, then close by speed");
-    expectEqual(last_move_absolute_target, -450, "homing should stop at measured midpoint");
+    expectEqual(last_move_absolute_target, -476, "homing should stop at the safe operating midpoint");
 
     expectTrue(device.open(), "open command should succeed after initialization");
-    expectEqual(last_move_absolute_target, 100, "open should use measured open limit");
+    expectEqual(last_move_absolute_target, 48, "open should stay inside the measured open limit");
 
     expectTrue(device.close(), "close command should succeed after initialization");
     expectEqual(last_move_absolute_target, -1000, "close should use measured close limit");
 
     expectTrue(device.moveToOpeningMm(52.5f), "mid opening command should succeed after initialization");
-    expectEqual(last_move_absolute_target, -450, "52.5 mm should map to measured midpoint");
+    expectEqual(last_move_absolute_target, -476, "52.5 mm should map to the safe operating midpoint");
 }
 
 } // namespace

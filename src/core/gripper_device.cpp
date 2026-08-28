@@ -191,6 +191,7 @@ GripperDevice::GripperDevice(const GripperDeviceConfig& config)
       initialized_(false),
       calibrated_limits_valid_(false),
       open_limit_count_(0),
+      safe_open_limit_count_(0),
       close_limit_count_(0)
 {
     motor_.setTimeoutMs(config_.timeout_ms);
@@ -204,6 +205,7 @@ GripperDevice::GripperDevice(const GripperDeviceConfig& config,
       initialized_(false),
       calibrated_limits_valid_(false),
       open_limit_count_(0),
+      safe_open_limit_count_(0),
       close_limit_count_(0)
 {
     motor_.setTimeoutMs(config_.timeout_ms);
@@ -263,6 +265,12 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         return false;
     }
 
+    if (!(config.current_limit_amp > 0.0f))
+    {
+        last_error_ = "invalid initialize config: current_limit_amp must be > 0";
+        return false;
+    }
+
     if (config.poll_interval_ms <= 0)
     {
         last_error_ = "invalid initialize config: poll_interval_ms must be > 0";
@@ -299,6 +307,13 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         return false;
     }
 
+    if (config.open_safety_margin_mm < 0.0f ||
+        config.open_safety_margin_mm >= maxOpeningMm())
+    {
+        last_error_ = "invalid initialize config: open_safety_margin_mm must be >= 0 and < max opening";
+        return false;
+    }
+
     invalidateCalibration();
 
     if (out != nullptr)
@@ -315,6 +330,44 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
             return false;
         }
     }
+
+    MotionControlParameters motion_params{};
+    if (!motor_.readMotionControlParameters(motion_params))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    const float current_limit_amp =
+        static_cast<float>(motion_params.speed_output_limit) * 0.001f;
+    homingDebugLog("current limit before homing speed_output_limit=%lu current_limit_amp=%.3f",
+                   static_cast<unsigned long>(motion_params.speed_output_limit),
+                   static_cast<double>(current_limit_amp));
+
+    const double current_limit_raw =
+        std::round(static_cast<double>(config.current_limit_amp) * 1000.0);
+    if (current_limit_raw > static_cast<double>(std::numeric_limits<uint32_t>::max()))
+    {
+        last_error_ = "invalid initialize config: current_limit_amp is too large";
+        return false;
+    }
+
+    motion_params.speed_output_limit = static_cast<uint32_t>(current_limit_raw);
+    if (!motor_.writeMotionControlParametersTemp(motion_params, nullptr))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    const float applied_current_limit_amp =
+        static_cast<float>(motion_params.speed_output_limit) * 0.001f;
+    if (out != nullptr)
+    {
+        out->current_limit_amp_during_homing = applied_current_limit_amp;
+    }
+    homingDebugLog("set homing current limit speed_output_limit=%lu current_limit_amp=%.3f",
+                   static_cast<unsigned long>(motion_params.speed_output_limit),
+                   static_cast<double>(applied_current_limit_amp));
 
     const float search_speed_rpm =
         openingSpeedMmSToMotorRpmConservative(config.search_speed_mm_s);
@@ -387,14 +440,25 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         return false;
     }
 
+    const double usable_open_ratio =
+        1.0 - static_cast<double>(config.open_safety_margin_mm) /
+                  static_cast<double>(maxOpeningMm());
+    const double safe_open_count =
+        static_cast<double>(close_limit_count_) +
+        usable_open_ratio *
+            static_cast<double>(open_limit_count_ - close_limit_count_);
+    safe_open_limit_count_ = static_cast<int32_t>(std::lround(safe_open_count));
+
     const std::int64_t center_count_sum =
-        static_cast<std::int64_t>(open_limit.multi_turn_count) +
-        static_cast<std::int64_t>(close_limit.multi_turn_count);
+        static_cast<std::int64_t>(safe_open_limit_count_) +
+        static_cast<std::int64_t>(close_limit_count_);
     const int32_t center_count = static_cast<int32_t>(center_count_sum / 2);
 
-    homingDebugLog("center target open_count=%ld close_count=%ld center_count=%ld",
+    homingDebugLog("center target mechanical_open_count=%ld safe_open_count=%ld close_count=%ld open_safety_margin_mm=%.3f center_count=%ld",
                    static_cast<long>(open_limit.multi_turn_count),
+                   static_cast<long>(safe_open_limit_count_),
                    static_cast<long>(close_limit.multi_turn_count),
+                   static_cast<double>(config.open_safety_margin_mm),
                    static_cast<long>(center_count));
 
     RealtimeStatus latest{};
@@ -906,6 +970,7 @@ void GripperDevice::invalidateCalibration()
     initialized_ = false;
     calibrated_limits_valid_ = false;
     open_limit_count_ = 0;
+    safe_open_limit_count_ = 0;
     close_limit_count_ = 0;
 }
 
@@ -941,7 +1006,7 @@ float GripperDevice::countToOpeningMm(int32_t count) const
     {
         const double opening_ratio =
             (static_cast<double>(count) - static_cast<double>(close_limit_count_)) /
-            (static_cast<double>(open_limit_count_) - static_cast<double>(close_limit_count_));
+            (static_cast<double>(safe_open_limit_count_) - static_cast<double>(close_limit_count_));
         const double opening =
             std::clamp(opening_ratio, 0.0, 1.0) *
             static_cast<double>(maxOpeningMm());
@@ -1006,7 +1071,7 @@ bool GripperDevice::openingMmToCount(float opening_mm, int32_t& out_count)
         const double ratio = (target_mm - min_mm) / (max_mm - min_mm);
         const double target_count =
             static_cast<double>(close_limit_count_) +
-            ratio * static_cast<double>(open_limit_count_ - close_limit_count_);
+            ratio * static_cast<double>(safe_open_limit_count_ - close_limit_count_);
         out_count = static_cast<int32_t>(std::lround(target_count));
         last_error_.clear();
         return true;
