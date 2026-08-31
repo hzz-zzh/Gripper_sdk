@@ -337,45 +337,46 @@ void test_device_profile_and_initialize_with_mock_transport()
             case Command::WriteMotionParamsTemp:
                 ++write_motion_params_count;
                 expectEqual(gripper::protocol::readU32LE(&request.payload[20]),
-                            static_cast<uint32_t>(2000),
-                            "homing should set the configured current limit before speed control");
+                            (write_motion_params_count == 1)
+                                ? static_cast<uint32_t>(2000)
+                                : static_cast<uint32_t>(1500),
+                            "unexpected temporary current limit");
                 current_limit_raw = gripper::protocol::readU32LE(&request.payload[20]);
                 io.enqueueFrame(request.sequence, request.device, cmd, request.payload);
                 break;
 
             case Command::WriteSpeed:
             {
-                expectEqual(write_motion_params_count, 1,
-                            "homing current limit must be set before speed control");
                 const int32_t speed_raw = gripper::protocol::readI32LE(request.payload.data());
-                expectTrue(speed_raw != 0, "homing should use nonzero speed commands");
 
                 ++write_speed_count;
-                if (write_speed_count == 1)
+                if (write_speed_count <= 3)
                 {
-                    expectTrue(speed_raw > 0, "first homing speed should open");
-                    phase = HomingPhase::OpenSearch;
-                }
-                else if (write_speed_count == 2)
-                {
-                    expectTrue(speed_raw < 0, "second homing speed should release toward closing");
-                    phase = HomingPhase::ReleasingOpenLimit;
-                }
-                else if (write_speed_count == 3)
-                {
-                    expectTrue(speed_raw < 0, "third homing speed should close");
-                    phase = HomingPhase::CloseSearch;
-                }
-                else
-                {
-                    throw TestFailure("unexpected extra speed command in homing test");
+                    expectEqual(write_motion_params_count, 1,
+                                "homing current limit must be set before speed control");
+                    expectTrue(speed_raw != 0, "homing should use nonzero speed commands");
+                    if (write_speed_count == 1)
+                    {
+                        expectTrue(speed_raw > 0, "first homing speed should open");
+                        phase = HomingPhase::OpenSearch;
+                    }
+                    else if (write_speed_count == 2)
+                    {
+                        expectTrue(speed_raw < 0, "second homing speed should release toward closing");
+                        phase = HomingPhase::ReleasingOpenLimit;
+                    }
+                    else
+                    {
+                        expectTrue(speed_raw < 0, "third homing speed should close");
+                        phase = HomingPhase::CloseSearch;
+                    }
                 }
 
                 io.enqueueRaw(makeRealtimeResponse(request.sequence,
                                                   request.device,
                                                   cmd,
-                                                  0,
-                                                  500,
+                                                  (write_speed_count <= 3) ? 0 : 48,
+                                                  (write_speed_count <= 3) ? 500 : 0,
                                                   100));
                 break;
             }
@@ -422,7 +423,7 @@ void test_device_profile_and_initialize_with_mock_transport()
                     io.enqueueRaw(makeRealtimeResponse(request.sequence,
                                                       request.device,
                                                       cmd,
-                                                      -500,
+                                                      last_move_absolute_target,
                                                       0,
                                                       0));
                 }
@@ -492,16 +493,30 @@ void test_device_profile_and_initialize_with_mock_transport()
     expectTrue(result.zero_set, "zero should be set");
     expectEqual(result.mechanical_offset, static_cast<uint16_t>(0), "software zero should not report mechanical offset");
     expectEqual(write_speed_count, 3, "homing should open, release, then close by speed");
-    expectEqual(last_move_absolute_target, -476, "homing should stop at the safe operating midpoint");
+    expectEqual(last_move_absolute_target, -466, "homing should stop at the safe operating midpoint");
 
     expectTrue(device.open(), "open command should succeed after initialization");
     expectEqual(last_move_absolute_target, 48, "open should stay inside the measured open limit");
 
     expectTrue(device.close(), "close command should succeed after initialization");
-    expectEqual(last_move_absolute_target, -1000, "close should use measured close limit");
+    expectEqual(last_move_absolute_target, -979, "close should stay inside the measured close limit");
 
     expectTrue(device.moveToOpeningMm(52.5f), "mid opening command should succeed after initialization");
-    expectEqual(last_move_absolute_target, -476, "52.5 mm should map to the safe operating midpoint");
+    expectEqual(last_move_absolute_target, -466, "52.5 mm should map to the safe operating midpoint");
+
+    gripper::PositionMotionConfig motion_cfg;
+    motion_cfg.max_speed_mm_s = 10000.0f;
+    motion_cfg.acceleration_mm_s2 = 1000000.0f;
+    motion_cfg.max_current_amp = 1.5f;
+    motion_cfg.max_following_error_mm = 1000.0f;
+    motion_cfg.position_tolerance_mm = 0.2f;
+    motion_cfg.speed_epsilon_mm_s = 0.5f;
+    motion_cfg.update_interval_ms = 1;
+    motion_cfg.timeout_ms = 100;
+    expectTrue(device.moveToOpeningMmSmooth(105.0f, motion_cfg),
+               "smooth move should reach the safe open target");
+    expectEqual(last_move_absolute_target, 48,
+                "smooth move should finish at the safe open target");
 }
 
 } // namespace

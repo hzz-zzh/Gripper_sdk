@@ -89,6 +89,7 @@ gripper_error_code_t map_error_to_code(const std::string& err)
 
     if (err == "invalid max_speed_rpm" ||
         err == "invalid max_current_amp" ||
+        err == "invalid smooth move config" ||
         err == "invalid device address: expected 1~254" ||
         err == "invalid RS485 baudrate: expected one of 9600/19200/38400/57600/115200/460800/921600")
     {
@@ -324,6 +325,7 @@ void gripper_initialize_config_init(gripper_initialize_config_t* config)
     config->set_zero_after_detect = 1;
     config->backoff_after_zero_mm = 2.0f;
     config->open_safety_margin_mm = 5.0f;
+    config->close_safety_margin_mm = 2.0f;
 }
 
 int gripper_initialize(gripper_handle_t* handle,
@@ -349,6 +351,7 @@ int gripper_initialize(gripper_handle_t* handle,
     cpp_config.set_zero_after_detect = (config->set_zero_after_detect != 0);
     cpp_config.backoff_after_zero_mm = config->backoff_after_zero_mm;
     cpp_config.open_safety_margin_mm = config->open_safety_margin_mm;
+    cpp_config.close_safety_margin_mm = config->close_safety_margin_mm;
 
     gripper::GripperInitializeResult cpp_result{};
     if (!handle->device.initialize(cpp_config, &cpp_result))
@@ -404,6 +407,55 @@ int gripper_move_to_opening_mm_with_limits(gripper_handle_t* handle,
     if (!handle->device.moveToOpeningMmWithLimits(opening_mm,
                                                   max_speed_mm_s,
                                                   max_current_amp))
+    {
+        return static_cast<int>(set_error_from_device(handle));
+    }
+
+    clear_error(handle);
+    return GRIPPER_OK;
+}
+
+void gripper_position_motion_config_init(gripper_position_motion_config_t* config)
+{
+    if (config == nullptr)
+    {
+        return;
+    }
+
+    config->max_speed_mm_s = 150.0f;
+    config->acceleration_mm_s2 = 1000.0f;
+    config->max_current_amp = 1.5f;
+    config->max_following_error_mm = 15.0f;
+    config->braking_margin_mm = 4.0f;
+    config->final_position_speed_mm_s = 30.0f;
+    config->position_tolerance_mm = 0.2f;
+    config->speed_epsilon_mm_s = 0.5f;
+    config->update_interval_ms = 20;
+    config->timeout_ms = 8000;
+}
+
+int gripper_move_to_opening_mm_smooth(gripper_handle_t* handle,
+                                      float opening_mm,
+                                      const gripper_position_motion_config_t* config)
+{
+    if (handle == nullptr || config == nullptr)
+    {
+        return GRIPPER_ERR_INVALID_ARGUMENT;
+    }
+
+    gripper::PositionMotionConfig cpp_config;
+    cpp_config.max_speed_mm_s = config->max_speed_mm_s;
+    cpp_config.acceleration_mm_s2 = config->acceleration_mm_s2;
+    cpp_config.max_current_amp = config->max_current_amp;
+    cpp_config.max_following_error_mm = config->max_following_error_mm;
+    cpp_config.braking_margin_mm = config->braking_margin_mm;
+    cpp_config.final_position_speed_mm_s = config->final_position_speed_mm_s;
+    cpp_config.position_tolerance_mm = config->position_tolerance_mm;
+    cpp_config.speed_epsilon_mm_s = config->speed_epsilon_mm_s;
+    cpp_config.update_interval_ms = config->update_interval_ms;
+    cpp_config.timeout_ms = config->timeout_ms;
+
+    if (!handle->device.moveToOpeningMmSmooth(opening_mm, cpp_config))
     {
         return static_cast<int>(set_error_from_device(handle));
     }

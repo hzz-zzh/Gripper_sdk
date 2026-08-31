@@ -178,6 +178,29 @@ void homingDebugStatus(const char* label, const RealtimeStatus& status)
                    status.motor_enabled ? 1 : 0);
 }
 
+inline bool motionDebugEnabled()
+{
+    const char* value = std::getenv("GRIPPER_MOTION_DEBUG");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+void motionDebugLog(const char* format, ...)
+{
+    if (!motionDebugEnabled())
+    {
+        return;
+    }
+
+    std::fprintf(stderr, "[gripper motion] ");
+
+    va_list args;
+    va_start(args, format);
+    std::vfprintf(stderr, format, args);
+    va_end(args);
+
+    std::fprintf(stderr, "\n");
+}
+
 inline const char* kCommConfigMayHaveAppliedMessage()
 {
     return "communication config may have been applied; reconnect with new address/baudrate";
@@ -192,7 +215,8 @@ GripperDevice::GripperDevice(const GripperDeviceConfig& config)
       calibrated_limits_valid_(false),
       open_limit_count_(0),
       safe_open_limit_count_(0),
-      close_limit_count_(0)
+      close_limit_count_(0),
+      safe_close_limit_count_(0)
 {
     motor_.setTimeoutMs(config_.timeout_ms);
 }
@@ -206,7 +230,8 @@ GripperDevice::GripperDevice(const GripperDeviceConfig& config,
       calibrated_limits_valid_(false),
       open_limit_count_(0),
       safe_open_limit_count_(0),
-      close_limit_count_(0)
+      close_limit_count_(0),
+      safe_close_limit_count_(0)
 {
     motor_.setTimeoutMs(config_.timeout_ms);
 }
@@ -311,6 +336,14 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         config.open_safety_margin_mm >= maxOpeningMm())
     {
         last_error_ = "invalid initialize config: open_safety_margin_mm must be >= 0 and < max opening";
+        return false;
+    }
+
+    if (config.close_safety_margin_mm < 0.0f ||
+        config.close_safety_margin_mm >= maxOpeningMm() ||
+        config.open_safety_margin_mm + config.close_safety_margin_mm >= maxOpeningMm())
+    {
+        last_error_ = "invalid initialize config: close/open safety margins leave no usable travel";
         return false;
     }
 
@@ -448,17 +481,34 @@ bool GripperDevice::initialize(const GripperInitializeConfig& config,
         usable_open_ratio *
             static_cast<double>(open_limit_count_ - close_limit_count_);
     safe_open_limit_count_ = static_cast<int32_t>(std::lround(safe_open_count));
+    const double safe_close_ratio =
+        static_cast<double>(config.close_safety_margin_mm) /
+        static_cast<double>(maxOpeningMm());
+    const double safe_close_count =
+        static_cast<double>(close_limit_count_) +
+        safe_close_ratio *
+            static_cast<double>(open_limit_count_ - close_limit_count_);
+    safe_close_limit_count_ = static_cast<int32_t>(std::lround(safe_close_count));
+    if (safe_open_limit_count_ == safe_close_limit_count_)
+    {
+        calibrated_limits_valid_ = false;
+        last_error_ = "invalid homing limits: open safety margin leaves no usable travel";
+        return false;
+    }
 
-    const std::int64_t center_count_sum =
-        static_cast<std::int64_t>(safe_open_limit_count_) +
-        static_cast<std::int64_t>(close_limit_count_);
-    const int32_t center_count = static_cast<int32_t>(center_count_sum / 2);
+    const double center_count_value =
+        (static_cast<double>(safe_open_limit_count_) +
+         static_cast<double>(safe_close_limit_count_)) /
+        2.0;
+    const int32_t center_count = static_cast<int32_t>(std::lround(center_count_value));
 
-    homingDebugLog("center target mechanical_open_count=%ld safe_open_count=%ld close_count=%ld open_safety_margin_mm=%.3f center_count=%ld",
+    homingDebugLog("center target mechanical_open_count=%ld safe_open_count=%ld mechanical_close_count=%ld safe_close_count=%ld open_safety_margin_mm=%.3f close_safety_margin_mm=%.3f center_count=%ld",
                    static_cast<long>(open_limit.multi_turn_count),
                    static_cast<long>(safe_open_limit_count_),
                    static_cast<long>(close_limit.multi_turn_count),
+                   static_cast<long>(safe_close_limit_count_),
                    static_cast<double>(config.open_safety_margin_mm),
+                   static_cast<double>(config.close_safety_margin_mm),
                    static_cast<long>(center_count));
 
     RealtimeStatus latest{};
@@ -838,6 +888,541 @@ bool GripperDevice::moveToOpeningMmWithLimits(float target_opening_mm,
     return true;
 }
 
+bool GripperDevice::moveToOpeningMmSmooth(float target_opening_mm,
+                                          const PositionMotionConfig& config,
+                                          GripperStatus* out)
+{
+    if (!initialized_)
+    {
+        last_error_ = "gripper not initialized";
+        return false;
+    }
+
+    if (!(config.max_speed_mm_s > 0.0f) ||
+        !(config.acceleration_mm_s2 > 0.0f) ||
+        !(config.max_current_amp > 0.0f) ||
+        config.braking_margin_mm < 0.0f ||
+        !(config.final_position_speed_mm_s > 0.0f) ||
+        config.position_tolerance_mm < 0.0f ||
+        config.speed_epsilon_mm_s < 0.0f ||
+        config.update_interval_ms <= 0 ||
+        config.timeout_ms <= 0)
+    {
+        last_error_ = "invalid smooth move config";
+        return false;
+    }
+
+    int32_t target_count = 0;
+    if (!openingMmToCount(target_opening_mm, target_count))
+    {
+        return false;
+    }
+
+    RealtimeStatus latest{};
+    if (!motor_.readRealtime(latest))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+    if (latest.fault_code != 0)
+    {
+        last_error_ = makeFaultContextError("fault occurred before smooth position move",
+                                            latest.fault_code);
+        return false;
+    }
+
+    const double calibrated_span_count =
+        std::abs(static_cast<double>(safe_open_limit_count_) -
+                 static_cast<double>(safe_close_limit_count_));
+    const double counts_per_mm =
+        calibrated_span_count / static_cast<double>(maxOpeningMm() - minOpeningMm());
+    const double max_speed_rpm =
+        static_cast<double>(config.max_speed_mm_s) * counts_per_mm * 60.0 /
+        kEncoderCountPerRev;
+    const double acceleration_rpm_s =
+        static_cast<double>(config.acceleration_mm_s2) * counts_per_mm * 60.0 /
+        kEncoderCountPerRev;
+    const double acceleration_raw_value = std::round(acceleration_rpm_s * 100.0);
+    if (acceleration_raw_value < 1.0 ||
+        acceleration_raw_value > static_cast<double>(std::numeric_limits<uint32_t>::max()))
+    {
+        last_error_ = "invalid smooth move config";
+        return false;
+    }
+    const uint32_t acceleration_raw =
+        static_cast<uint32_t>(acceleration_raw_value);
+
+    MotionControlParameters motion_params{};
+    if (!motor_.readMotionControlParameters(motion_params))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+    const double current_limit_raw_value =
+        std::round(static_cast<double>(config.max_current_amp) * 1000.0);
+    if (current_limit_raw_value < 1.0 ||
+        current_limit_raw_value > static_cast<double>(std::numeric_limits<uint32_t>::max()))
+    {
+        last_error_ = "invalid smooth move config";
+        return false;
+    }
+    motion_params.speed_output_limit =
+        static_cast<uint32_t>(current_limit_raw_value);
+    if (!motor_.writeMotionControlParametersTemp(motion_params, nullptr))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    const double tolerance_count =
+        std::max(10.0,
+                 static_cast<double>(config.position_tolerance_mm) * counts_per_mm);
+    const double braking_margin_count =
+        static_cast<double>(config.braking_margin_mm) * counts_per_mm;
+    const double acceleration_count_s2 =
+        static_cast<double>(config.acceleration_mm_s2) * counts_per_mm;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(config.timeout_ms);
+
+    const double initial_error_count =
+        static_cast<double>(target_count) - static_cast<double>(latest.multi_turn_count);
+    const int direction = (initial_error_count >= 0.0) ? 1 : -1;
+
+    motionDebugLog("speed-profile move start actual_count=%ld target_count=%ld max_speed_rpm=%.3f acceleration_rpm_s=%.3f braking_margin_mm=%.3f",
+                   static_cast<long>(latest.multi_turn_count),
+                   static_cast<long>(target_count),
+                   max_speed_rpm,
+                   acceleration_rpm_s,
+                   static_cast<double>(config.braking_margin_mm));
+
+    if (std::abs(initial_error_count) > tolerance_count)
+    {
+        if (!motor_.setSpeed(static_cast<float>(direction * max_speed_rpm),
+                             acceleration_raw,
+                             &latest))
+        {
+            setLastErrorFromMotor();
+            return false;
+        }
+
+        int sample_count = 0;
+        while (true)
+        {
+            if (latest.fault_code != 0)
+            {
+                motor_.setSpeed(0.0f, acceleration_raw, nullptr);
+                last_error_ = makeFaultContextError("fault occurred during smooth speed move",
+                                                    latest.fault_code);
+                return false;
+            }
+
+            const double remaining_count =
+                static_cast<double>(direction) *
+                (static_cast<double>(target_count) -
+                 static_cast<double>(latest.multi_turn_count));
+            const double actual_speed_count_s =
+                std::abs(static_cast<double>(latest.speed_rpm)) *
+                kEncoderCountPerRev / 60.0;
+            const double braking_distance_count =
+                (actual_speed_count_s * actual_speed_count_s) /
+                (2.0 * acceleration_count_s2);
+
+            ++sample_count;
+            if (sample_count <= 5 || sample_count % 10 == 0)
+            {
+                motionDebugLog("speed sample=%d actual_count=%ld target_count=%ld remaining_mm=%.3f speed_mm_s=%.3f braking_mm=%.3f q_current=%.3f",
+                               sample_count,
+                               static_cast<long>(latest.multi_turn_count),
+                               static_cast<long>(target_count),
+                               remaining_count / counts_per_mm,
+                               actual_speed_count_s / counts_per_mm,
+                               braking_distance_count / counts_per_mm,
+                               static_cast<double>(latest.q_current_amp));
+            }
+
+            if (remaining_count <= braking_distance_count + braking_margin_count)
+            {
+                break;
+            }
+
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                motor_.setSpeed(0.0f, acceleration_raw, nullptr);
+                last_error_ = "smooth position move timeout";
+                return false;
+            }
+
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(config.update_interval_ms));
+            if (!motor_.readRealtime(latest))
+            {
+                setLastErrorFromMotor();
+                motor_.setSpeed(0.0f, acceleration_raw, nullptr);
+                return false;
+            }
+        }
+
+        if (!motor_.setSpeed(0.0f, acceleration_raw, &latest))
+        {
+            setLastErrorFromMotor();
+            return false;
+        }
+
+        while (true)
+        {
+            const double actual_speed_mm_s =
+                std::abs(static_cast<double>(latest.speed_rpm)) *
+                kEncoderCountPerRev / 60.0 / counts_per_mm;
+            if (actual_speed_mm_s <= config.speed_epsilon_mm_s)
+            {
+                break;
+            }
+
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                last_error_ = "smooth position move timeout";
+                return false;
+            }
+
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(config.update_interval_ms));
+            if (!motor_.readRealtime(latest))
+            {
+                setLastErrorFromMotor();
+                return false;
+            }
+            if (latest.fault_code != 0)
+            {
+                last_error_ = makeFaultContextError("fault occurred while braking smooth move",
+                                                    latest.fault_code);
+                return false;
+            }
+        }
+    }
+
+    const float final_speed_mm_s =
+        std::min(config.final_position_speed_mm_s, config.max_speed_mm_s);
+    const float final_speed_rpm =
+        openingSpeedMmSToMotorRpm(final_speed_mm_s, latest.multi_turn_count);
+    if (!motor_.moveToCountWithLimits(target_count,
+                                      final_speed_rpm,
+                                      config.max_current_amp,
+                                      &latest))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    while (true)
+    {
+        if (latest.fault_code != 0)
+        {
+            last_error_ = makeFaultContextError("fault occurred during final position hold",
+                                                latest.fault_code);
+            return false;
+        }
+
+        const double count_error =
+            std::abs(static_cast<double>(latest.multi_turn_count) -
+                     static_cast<double>(target_count));
+        const double actual_speed_mm_s =
+            std::abs(static_cast<double>(latest.speed_rpm)) *
+            kEncoderCountPerRev / 60.0 / counts_per_mm;
+        if (count_error <= tolerance_count &&
+            actual_speed_mm_s <= config.speed_epsilon_mm_s)
+        {
+            if (out != nullptr)
+            {
+                convertRealtimeToStatus(latest, *out);
+            }
+            last_error_.clear();
+            return true;
+        }
+
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            motionDebugLog("final hold timeout actual_count=%ld target_count=%ld error_mm=%.3f speed_mm_s=%.3f q_current=%.3f",
+                           static_cast<long>(latest.multi_turn_count),
+                           static_cast<long>(target_count),
+                           count_error / counts_per_mm,
+                           actual_speed_mm_s,
+                           static_cast<double>(latest.q_current_amp));
+            last_error_ = "smooth position move timeout";
+            return false;
+        }
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(config.update_interval_ms));
+        if (!motor_.readRealtime(latest))
+        {
+            setLastErrorFromMotor();
+            return false;
+        }
+    }
+}
+
+bool GripperDevice::moveToOpeningMmPositionProfile(float target_opening_mm,
+                                                   const PositionMotionConfig& config,
+                                                   GripperStatus* out)
+{
+    if (!initialized_)
+    {
+        last_error_ = "gripper not initialized";
+        return false;
+    }
+
+    if (!(config.max_speed_mm_s > 0.0f) ||
+        !(config.acceleration_mm_s2 > 0.0f) ||
+        !(config.max_current_amp > 0.0f) ||
+        !(config.max_following_error_mm > 0.0f) ||
+        config.position_tolerance_mm < 0.0f ||
+        config.speed_epsilon_mm_s < 0.0f ||
+        config.update_interval_ms <= 0 ||
+        config.timeout_ms <= 0)
+    {
+        last_error_ = "invalid smooth move config";
+        return false;
+    }
+
+    int32_t target_count = 0;
+    if (!openingMmToCount(target_opening_mm, target_count))
+    {
+        return false;
+    }
+
+    RealtimeStatus current{};
+    if (!motor_.readRealtime(current))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+    if (current.fault_code != 0)
+    {
+        last_error_ = makeFaultContextError("fault occurred before smooth position move",
+                                            current.fault_code);
+        return false;
+    }
+
+    const float max_speed_rpm =
+        openingSpeedMmSToMotorRpm(config.max_speed_mm_s, current.multi_turn_count);
+
+    // Enter position mode at the measured position first.  This avoids applying a
+    // large position error at the instant the controller changes mode.
+    RealtimeStatus latest{};
+    if (!motor_.moveToCountWithLimits(current.multi_turn_count,
+                                      max_speed_rpm,
+                                      config.max_current_amp,
+                                      &latest))
+    {
+        setLastErrorFromMotor();
+        return false;
+    }
+
+    const double calibrated_span_count =
+        std::abs(static_cast<double>(safe_open_limit_count_) -
+                 static_cast<double>(safe_close_limit_count_));
+    const double counts_per_mm =
+        calibrated_span_count / static_cast<double>(maxOpeningMm() - minOpeningMm());
+    const double max_speed_count_s =
+        static_cast<double>(config.max_speed_mm_s) * counts_per_mm;
+    const double acceleration_count_s2 =
+        static_cast<double>(config.acceleration_mm_s2) * counts_per_mm;
+    const double max_following_error_count =
+        static_cast<double>(config.max_following_error_mm) * counts_per_mm;
+    const double position_tolerance_count =
+        std::max(10.0,
+                 static_cast<double>(config.position_tolerance_mm) * counts_per_mm);
+
+    motionDebugLog("smooth move start actual_count=%ld target_count=%ld max_speed_mm_s=%.3f acceleration_mm_s2=%.3f following_error_mm=%.3f interval_ms=%d timeout_ms=%d",
+                   static_cast<long>(current.multi_turn_count),
+                   static_cast<long>(target_count),
+                   static_cast<double>(config.max_speed_mm_s),
+                   static_cast<double>(config.acceleration_mm_s2),
+                   static_cast<double>(config.max_following_error_mm),
+                   config.update_interval_ms,
+                   config.timeout_ms);
+
+    const int direction =
+        (target_count >= current.multi_turn_count) ? 1 : -1;
+    double commanded_count = static_cast<double>(current.multi_turn_count);
+    double profile_speed_count_s = 0.0;
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(config.timeout_ms);
+    auto last_profile_time = std::chrono::steady_clock::now();
+    auto next_update =
+        last_profile_time + std::chrono::milliseconds(config.update_interval_ms);
+    int sample_count = 0;
+
+    while (std::abs(static_cast<double>(target_count) - commanded_count) >= 0.5)
+    {
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            last_error_ = "smooth position move timeout";
+            return false;
+        }
+
+        std::this_thread::sleep_until(next_update);
+        const auto now = std::chrono::steady_clock::now();
+        const double dt_s =
+            std::max(1e-4,
+                     std::chrono::duration<double>(now - last_profile_time).count());
+        last_profile_time = now;
+        next_update += std::chrono::milliseconds(config.update_interval_ms);
+        if (next_update < now)
+        {
+            next_update = now;
+        }
+
+        const double remaining_count =
+            std::abs(static_cast<double>(target_count) - commanded_count);
+        const double braking_speed_count_s =
+            std::sqrt(2.0 * acceleration_count_s2 * remaining_count);
+        const double desired_speed_count_s =
+            std::min(max_speed_count_s, braking_speed_count_s);
+        const double speed_step_count_s = acceleration_count_s2 * dt_s;
+        if (profile_speed_count_s < desired_speed_count_s)
+        {
+            profile_speed_count_s =
+                std::min(desired_speed_count_s,
+                         profile_speed_count_s + speed_step_count_s);
+        }
+        else
+        {
+            profile_speed_count_s =
+                std::max(desired_speed_count_s,
+                         profile_speed_count_s - speed_step_count_s);
+        }
+
+        const double profile_step_count =
+            std::min(remaining_count, profile_speed_count_s * dt_s);
+        double next_command_count =
+            commanded_count + static_cast<double>(direction) * profile_step_count;
+        const double profile_command_count = next_command_count;
+
+        // Do not let the host-generated target run too far ahead of the motor.
+        const double following_limit_count =
+            static_cast<double>(latest.multi_turn_count) +
+            static_cast<double>(direction) * max_following_error_count;
+        if (direction > 0)
+        {
+            next_command_count =
+                std::min(next_command_count,
+                         std::min(static_cast<double>(target_count), following_limit_count));
+            next_command_count = std::max(next_command_count, commanded_count);
+        }
+        else
+        {
+            next_command_count =
+                std::max(next_command_count,
+                         std::max(static_cast<double>(target_count), following_limit_count));
+            next_command_count = std::min(next_command_count, commanded_count);
+        }
+        const bool following_limited =
+            std::abs(next_command_count - profile_command_count) >= 0.5;
+
+        int32_t next_count = static_cast<int32_t>(std::lround(next_command_count));
+        const int32_t previous_command_count =
+            static_cast<int32_t>(std::lround(commanded_count));
+        if (next_count == previous_command_count)
+        {
+            if (!motor_.readRealtime(latest))
+            {
+                setLastErrorFromMotor();
+                return false;
+            }
+        }
+        else
+        {
+            if (!motor_.moveToCount(next_count, &latest))
+            {
+                setLastErrorFromMotor();
+                return false;
+            }
+            commanded_count = static_cast<double>(next_count);
+        }
+
+        if (latest.fault_code != 0)
+        {
+            last_error_ = makeFaultContextError("fault occurred during smooth position move",
+                                                latest.fault_code);
+            return false;
+        }
+
+        ++sample_count;
+        if (sample_count <= 5 || sample_count % 10 == 0 || following_limited)
+        {
+            const double following_error_mm =
+                std::abs(commanded_count - static_cast<double>(latest.multi_turn_count)) /
+                counts_per_mm;
+            motionDebugLog("sample=%d command_count=%ld actual_count=%ld target_count=%ld profile_speed_mm_s=%.3f actual_speed_mm_s=%.3f q_current=%.3f following_error_mm=%.3f following_limited=%d",
+                           sample_count,
+                           static_cast<long>(std::lround(commanded_count)),
+                           static_cast<long>(latest.multi_turn_count),
+                           static_cast<long>(target_count),
+                           profile_speed_count_s / counts_per_mm,
+                           static_cast<double>(motorRpmToOpeningSpeedMmS(
+                               latest.speed_rpm, latest.multi_turn_count)),
+                           static_cast<double>(latest.q_current_amp),
+                           following_error_mm,
+                           following_limited ? 1 : 0);
+        }
+    }
+
+    if (static_cast<int32_t>(std::lround(commanded_count)) != target_count)
+    {
+        if (!motor_.moveToCount(target_count, &latest))
+        {
+            setLastErrorFromMotor();
+            return false;
+        }
+    }
+
+    while (true)
+    {
+        if (latest.fault_code != 0)
+        {
+            last_error_ = makeFaultContextError("fault occurred while settling smooth position move",
+                                                latest.fault_code);
+            return false;
+        }
+
+        const double count_error =
+            std::abs(static_cast<double>(latest.multi_turn_count) -
+                     static_cast<double>(target_count));
+        const float opening_speed_mm_s =
+            motorRpmToOpeningSpeedMmS(latest.speed_rpm, latest.multi_turn_count);
+        if (count_error <= position_tolerance_count &&
+            std::abs(opening_speed_mm_s) <= config.speed_epsilon_mm_s)
+        {
+            if (out != nullptr)
+            {
+                convertRealtimeToStatus(latest, *out);
+            }
+            last_error_.clear();
+            return true;
+        }
+
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            last_error_ = "smooth position move timeout";
+            motionDebugLog("smooth move timeout while settling actual_count=%ld target_count=%ld speed_mm_s=%.3f q_current=%.3f",
+                           static_cast<long>(latest.multi_turn_count),
+                           static_cast<long>(target_count),
+                           static_cast<double>(opening_speed_mm_s),
+                           static_cast<double>(latest.q_current_amp));
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(config.update_interval_ms));
+        if (!motor_.readRealtime(latest))
+        {
+            setLastErrorFromMotor();
+            return false;
+        }
+    }
+}
+
 bool GripperDevice::open(GripperStatus* out)
 {
     return moveToOpeningMm(maxOpeningMm(), out);
@@ -972,6 +1557,7 @@ void GripperDevice::invalidateCalibration()
     open_limit_count_ = 0;
     safe_open_limit_count_ = 0;
     close_limit_count_ = 0;
+    safe_close_limit_count_ = 0;
 }
 
 float GripperDevice::minOpeningMm() const
@@ -1005,8 +1591,8 @@ float GripperDevice::countToOpeningMm(int32_t count) const
     if (calibrated_limits_valid_)
     {
         const double opening_ratio =
-            (static_cast<double>(count) - static_cast<double>(close_limit_count_)) /
-            (static_cast<double>(safe_open_limit_count_) - static_cast<double>(close_limit_count_));
+            (static_cast<double>(count) - static_cast<double>(safe_close_limit_count_)) /
+            (static_cast<double>(safe_open_limit_count_) - static_cast<double>(safe_close_limit_count_));
         const double opening =
             std::clamp(opening_ratio, 0.0, 1.0) *
             static_cast<double>(maxOpeningMm());
@@ -1070,8 +1656,8 @@ bool GripperDevice::openingMmToCount(float opening_mm, int32_t& out_count)
     {
         const double ratio = (target_mm - min_mm) / (max_mm - min_mm);
         const double target_count =
-            static_cast<double>(close_limit_count_) +
-            ratio * static_cast<double>(safe_open_limit_count_ - close_limit_count_);
+            static_cast<double>(safe_close_limit_count_) +
+            ratio * static_cast<double>(safe_open_limit_count_ - safe_close_limit_count_);
         out_count = static_cast<int32_t>(std::lround(target_count));
         last_error_.clear();
         return true;

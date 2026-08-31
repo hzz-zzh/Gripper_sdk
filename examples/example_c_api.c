@@ -111,6 +111,7 @@ int main(void)
     hc.set_zero_after_detect = 1;
     hc.backoff_after_zero_mm = 2.0f;
     hc.open_safety_margin_mm = 8.0f;
+    hc.close_safety_margin_mm = 2.0f;
 
     printf("start homing with current limit %.3f A...\n", hc.current_limit_amp);
     rc = gripper_initialize(h, &hc, &hr);
@@ -135,16 +136,28 @@ int main(void)
     printf("final status after homing:\n");
     print_status(&hr.final_status);
 
+    gripper_position_motion_config_t motion;
+    gripper_position_motion_config_init(&motion);
+    motion.max_speed_mm_s = 150.0f;
+    motion.acceleration_mm_s2 = 1000.0f;
+    motion.max_current_amp = 1.5f;
+    motion.max_following_error_mm = 15.0f;
+    motion.braking_margin_mm = 4.0f;
+    motion.final_position_speed_mm_s = 30.0f;
+    motion.position_tolerance_mm = 0.2f;
+    motion.speed_epsilon_mm_s = 0.5f;
+    motion.update_interval_ms = 20;
+    motion.timeout_ms = 8000;
+
     while (!stop_requested)
     {
-        rc = gripper_move_to_opening_mm_with_limits(h, 0.0f, 150.0f, 1.5f);
+        rc = gripper_move_to_opening_mm_smooth(h, 0.0f, &motion);
         if (rc != GRIPPER_OK)
         {
-            print_api_error(h, "move to 0.0 mm", rc);
+            print_api_error(h, "smooth move to 0.0 mm", rc);
             break;
         }
 
-        usleep(1000 * 1000);
         if (stop_requested)
         {
             break;
@@ -162,14 +175,13 @@ int main(void)
             break;
         }
 
-        rc = gripper_move_to_opening_mm_with_limits(h, 105.0f, 150.0f, 1.5f);
+        rc = gripper_move_to_opening_mm_smooth(h, 105.0f, &motion);
         if (rc != GRIPPER_OK)
         {
-            print_api_error(h, "move to 105.0 mm", rc);
+            print_api_error(h, "smooth move to 105.0 mm", rc);
             break;
         }
 
-        usleep(1000 * 1000);
         if (stop_requested)
         {
             break;

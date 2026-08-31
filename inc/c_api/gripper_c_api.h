@@ -48,6 +48,7 @@ typedef struct
     int set_zero_after_detect;
     float backoff_after_zero_mm;
     float open_safety_margin_mm;
+    float close_safety_margin_mm;
 } gripper_initialize_config_t;
 
 typedef struct
@@ -64,6 +65,20 @@ typedef struct
 
     gripper_status_t final_status;
 } gripper_initialize_result_t;
+
+typedef struct
+{
+    float max_speed_mm_s;
+    float acceleration_mm_s2;
+    float max_current_amp;
+    float max_following_error_mm;
+    float braking_margin_mm;
+    float final_position_speed_mm_s;
+    float position_tolerance_mm;
+    float speed_epsilon_mm_s;
+    int update_interval_ms;
+    int timeout_ms;
+} gripper_position_motion_config_t;
 
 typedef enum
 {
@@ -111,6 +126,10 @@ int gripper_move_to_opening_mm_with_limits(gripper_handle_t* handle,
                                            float opening_mm,
                                            float max_speed_mm_s,
                                            float max_current_amp);
+void gripper_position_motion_config_init(gripper_position_motion_config_t* config);
+int gripper_move_to_opening_mm_smooth(gripper_handle_t* handle,
+                                      float opening_mm,
+                                      const gripper_position_motion_config_t* config);
 
 int gripper_open(gripper_handle_t* handle);
 int gripper_close(gripper_handle_t* handle);

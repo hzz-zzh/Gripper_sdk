@@ -49,6 +49,7 @@ struct GripperInitializeConfig
 
     float backoff_after_zero_mm = 5.0f;
     float open_safety_margin_mm = 5.0f;
+    float close_safety_margin_mm = 2.0f;
 };
 
 struct GripperInitializeResult
@@ -64,6 +65,20 @@ struct GripperInitializeResult
     uint16_t mechanical_offset = 0;
 
     GripperStatus final_status{};
+};
+
+struct PositionMotionConfig
+{
+    float max_speed_mm_s = 150.0f;
+    float acceleration_mm_s2 = 1000.0f;
+    float max_current_amp = 1.5f;
+    float max_following_error_mm = 15.0f;
+    float braking_margin_mm = 4.0f;
+    float final_position_speed_mm_s = 30.0f;
+    float position_tolerance_mm = 0.2f;
+    float speed_epsilon_mm_s = 0.5f;
+    int update_interval_ms = 20;
+    int timeout_ms = 8000;
 };
 
 class GripperDevice
@@ -88,6 +103,9 @@ public:
                                    float max_speed_mm_s = 0.0f,
                                    float max_current_amp = 0.0f,
                                    GripperStatus* out = nullptr);
+    bool moveToOpeningMmSmooth(float target_opening_mm,
+                               const PositionMotionConfig& config,
+                               GripperStatus* out = nullptr);
 
     bool open(GripperStatus* out = nullptr);
     bool close(GripperStatus* out = nullptr);
@@ -127,6 +145,9 @@ private:
     bool waitForTargetCount(const GripperInitializeConfig& config,
                             int32_t target_count,
                             RealtimeStatus& out_status);
+    bool moveToOpeningMmPositionProfile(float target_opening_mm,
+                                        const PositionMotionConfig& config,
+                                        GripperStatus* out);
 
     bool openingMmToCount(float opening_mm, int32_t& out_count);
     int32_t openingMmToBackoffDeltaCount(float delta_mm, int32_t reference_count) const;
@@ -143,6 +164,7 @@ private:
     int32_t open_limit_count_;
     int32_t safe_open_limit_count_;
     int32_t close_limit_count_;
+    int32_t safe_close_limit_count_;
 };
 }
 
